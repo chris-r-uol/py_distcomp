@@ -1,11 +1,3 @@
----
-title: PyDistComp - Python Distribution Comparison Tool
-description: A professional Python library for statistical distribution comparison and visualization.
-keywords: Python, distribution comparison, statistical analysis, Q-Q plot, P-P plot, CDF comparison, histogram overlay
-license: MIT
-author: Chris Rushton
-format: html
----
 
 # PyDistComp: Python Distribution Comparison Tool
 
