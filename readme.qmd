@@ -1,0 +1,280 @@
+# PyDistComp: Python Distribution Comparison Tool
+
+A professional Python library for comprehensive statistical distribution comparison and visualization. PyDistComp provides advanced Q-Q plots, P-P plots, CDF comparisons, and histogram overlays to help analysts and researchers evaluate how well theoretical distributions fit their empirical data.
+
+## 🌟 Features
+
+- **Multi-Distribution Comparison**: Compare your data against multiple theoretical distributions simultaneously
+- **Interactive Visualizations**: Professional-quality plots using Plotly with hover information and zoom capabilities
+- **Comprehensive Distribution Support**: 15+ built-in distributions including Normal, Log-normal, Weibull, Gamma, Beta, and more
+- **Custom Distribution Support**: Use any scipy.stats distribution object
+- **Multiple Plot Types**: Q-Q plots, P-P plots, CDF comparisons, and histogram overlays
+- **Statistical Analysis**: Automatic parameter estimation with support for custom parameters
+- **Streamlit Demo App**: Interactive web application for exploring functionality
+- **Professional Documentation**: Comprehensive docstrings and type hints
+
+## 📊 Supported Distributions
+
+| Distribution | String Key | Parameters |
+|-------------|------------|------------|
+| Normal | `'normal'` | mean, std |
+| Log-normal | `'lognormal'` | shape, loc, scale |
+| Weibull | `'weibull'` | shape, loc, scale |
+| Gumbel | `'gumbel'` | loc, scale |
+| Exponential | `'exponential'` | loc, scale |
+| Gamma | `'gamma'` | shape, loc, scale |
+| Beta | `'beta'` | a, b, loc, scale |
+| Uniform | `'uniform'` | loc, scale |
+| Logistic | `'logistic'` | loc, scale |
+| Laplace | `'laplace'` | loc, scale |
+| Chi-squared | `'chi2'` | df, loc, scale |
+| Student's t | `'student_t'` | df, loc, scale |
+| F-distribution | `'f'` | dfn, dfd, loc, scale |
+| Pareto | `'pareto'` | b, loc, scale |
+| Rayleigh | `'rayleigh'` | loc, scale |
+
+## 🚀 Installation
+
+### Install from GitHub
+
+Since this package is not yet published to PyPI, install directly from GitHub:
+
+```bash
+pip install git+https://github.com/chris-r-uol/py_distcomp.git
+```
+
+### Development Installation
+
+For development or to run the demo app:
+
+```bash
+git clone https://github.com/chris-r-uol/py_distcomp.git
+cd py_distcomp
+pip install -r requirements.txt
+```
+
+### Requirements
+
+- Python 3.8+
+- numpy
+- pandas
+- plotly
+- scipy
+- streamlit (for demo app)
+
+## 📖 Quick Start
+
+### Basic Usage
+
+```python
+import numpy as np
+from quantile_multi_comparison import quantile_comparison_plot
+
+# Generate sample data
+data = np.random.normal(0, 1, 1000)
+
+# Single distribution comparison
+qq_fig = quantile_comparison_plot(data, models='normal')
+qq_fig.show()
+
+# Multiple distribution comparison
+qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
+    data, 
+    models=['normal', 'lognormal', 'weibull'],
+    title='Distribution Comparison',
+    data_name='Sample Data'
+)
+
+# Display all plots
+qq_fig.show()      # Q-Q plot
+hist_fig.show()    # Histogram with fitted curve
+pp_fig.show()      # P-P plot
+cdf_fig.show()     # CDF comparison
+```
+
+### Advanced Usage
+
+```python
+from scipy import stats
+import pandas as pd
+
+# Load your data
+data = pd.read_csv('your_data.csv')['column_name']
+
+# Compare against multiple distributions with custom parameters
+models = ['normal', 'weibull', stats.gamma]
+params = [
+    (0, 1),           # Normal: mean=0, std=1
+    (2, 0, 1),        # Weibull: shape=2, loc=0, scale=1
+    (2, 0, 1)         # Gamma: shape=2, loc=0, scale=1
+]
+
+qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
+    data=data,
+    models=models,
+    dist_params=params,
+    title='Custom Distribution Analysis',
+    data_name='My Data'
+)
+```
+
+## 🎛️ Demo Application
+
+Run the interactive Streamlit demo to explore functionality:
+
+```bash
+streamlit run app.py
+```
+
+The demo app provides:
+- Interactive data generation with various distributions
+- Real-time parameter adjustment
+- Multiple distribution comparison
+- Export capabilities for generated plots
+
+## 📚 API Reference
+
+### Main Function
+
+#### `quantile_comparison_plot`
+
+```python
+def quantile_comparison_plot(
+    data: Union[pd.Series, np.ndarray, list],
+    models: Union[str, List[str], object, List[object]] = 'normal',
+    title: str = 'Q-Q Plot',
+    data_name: str = 'Data',
+    dist_params: Optional[Union[tuple, dict, List[tuple], List[dict]]] = None,
+    include_histogram: bool = True
+) -> Union[go.Figure, Tuple[go.Figure, ...]]
+```
+
+**Parameters:**
+- `data`: Input data as pandas Series, numpy array, or list
+- `models`: Distribution model(s) to compare against
+- `title`: Plot title
+- `data_name`: Name for the empirical data series
+- `dist_params`: Distribution parameters (None for auto-estimation)
+- `include_histogram`: Whether to include additional plots
+
+**Returns:**
+- Single figure (if `include_histogram=False`)
+- Tuple of figures: (Q-Q plot, histogram, P-P plot, CDF plot)
+
+## 📈 Plot Types
+
+### Q-Q Plot (Quantile-Quantile)
+Compares quantiles of your data against theoretical distribution quantiles. Points falling on the diagonal line indicate good fit.
+
+### P-P Plot (Probability-Probability)  
+Compares cumulative probabilities. More sensitive to differences in the center of the distribution.
+
+### CDF Comparison
+Shows empirical vs theoretical cumulative distribution functions. Good for visualizing overall distribution shape.
+
+### Histogram with Fitted Curves
+Overlays theoretical probability density functions on your data histogram, with statistical markers.
+
+## 🎯 Use Cases
+
+- **Quality Control**: Assess if manufacturing data follows expected distributions
+- **Risk Analysis**: Validate assumptions about return distributions in finance
+- **Reliability Engineering**: Test if failure times follow Weibull or exponential distributions
+- **Environmental Science**: Analyze if measurements follow normal or log-normal distributions
+- **Research**: Validate distributional assumptions before statistical modeling
+
+## 🔧 Examples
+
+### Example 1: Financial Returns Analysis
+
+```python
+import yfinance as yf
+from quantile_multi_comparison import quantile_comparison_plot
+
+# Download stock data
+stock = yf.download('AAPL', start='2020-01-01', end='2023-01-01')
+returns = stock['Close'].pct_change().dropna()
+
+# Compare against common financial distributions
+qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
+    data=returns,
+    models=['normal', 'student_t', 'laplace'],
+    title='Stock Return Distribution Analysis',
+    data_name='AAPL Returns'
+)
+```
+
+### Example 2: Manufacturing Quality Control
+
+```python
+# Simulate manufacturing measurements
+measurements = np.random.normal(100, 2, 500)  # Target: 100mm ± 2mm
+
+# Check if process is in control
+qq_fig = quantile_comparison_plot(
+    data=measurements,
+    models='normal',
+    dist_params=(100, 2),  # Expected parameters
+    title='Manufacturing Process Control',
+    data_name='Part Dimensions'
+)
+```
+
+### Example 3: Reliability Analysis
+
+```python
+# Simulate failure times
+failure_times = np.random.weibull(2, 1000) * 100
+
+# Test against reliability distributions
+qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
+    data=failure_times,
+    models=['weibull', 'exponential', 'gamma'],
+    title='Component Reliability Analysis',
+    data_name='Time to Failure'
+)
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Development Setup
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Make your changes
+4. Add tests if applicable
+5. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+6. Push to the branch (`git push origin feature/AmazingFeature`)
+7. Open a Pull Request
+
+## 📝 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 📧 Contact
+
+**Chris Russell** - University of Leeds  
+GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
+
+## 🙏 Acknowledgments
+
+- Built with [Plotly](https://plotly.com/python/) for interactive visualizations
+- Statistical distributions provided by [SciPy](https://scipy.org/)
+- Inspired by R's `fitdistrplus` and `qqcomp` functions
+- Demo app powered by [Streamlit](https://streamlit.io/)
+
+## 📊 Roadmap
+
+- [ ] Add more distribution types (mixture models, custom distributions)
+- [ ] Implement goodness-of-fit statistics (KS test, Anderson-Darling, etc.)
+- [ ] Add confidence bands for Q-Q plots
+- [ ] Support for censored data analysis
+- [ ] Integration with statistical testing frameworks
+- [ ] Publication to PyPI
+- [ ] R package integration
+
+---
+
+⭐ **Star this repository if you find it useful!** ⭐
