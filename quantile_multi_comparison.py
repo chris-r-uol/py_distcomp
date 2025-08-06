@@ -330,7 +330,9 @@ def _add_beta_curve(fig: go.Figure) -> None:
         Plotly figure to add the curve to.
     """
     # Generate beta curve points for symmetric beta distributions (α = β)
-    alpha_values = np.linspace(0.5, 5, 30)
+    start = 0.0 # default = 0.5
+    finish = 10.0 # default = 5
+    alpha_values = np.linspace(start, finish, 120)
     skew_sq_values = []
     kurtosis_values = []
     
@@ -355,6 +357,39 @@ def _add_beta_curve(fig: go.Figure) -> None:
             "<extra></extra>"
         )
     ))
+
+    # ---- Asymmetric Beta: example curve with β = r * α (r ≠ 1)
+    ratios = [2, 5, 10]  # change this ratio to add different asymmetric curves
+    for ratio in ratios:
+        a = np.linspace(start, finish, 120)
+        b = ratio * a
+
+        # Skewness and (Pearson) kurtosis for Beta(a, b)
+        # skew = 2(b - a) * sqrt(a + b + 1) / ((a + b + 2) * sqrt(a b))
+        # kurt = excess + 3, where
+        # excess = 6[(a - b)^2 (a + b + 1) - a b (a + b + 2)] / [a b (a + b + 2)(a + b + 3)]
+        numerator_skew = 2.0 * (b - a) * np.sqrt(a + b + 1.0)
+        denom_skew = (a + b + 2.0) * np.sqrt(a * b)
+        skew = numerator_skew / denom_skew
+
+        excess_num = 6.0 * ((a - b)**2 * (a + b + 1.0) - a * b * (a + b + 2.0))
+        excess_den = (a * b * (a + b + 2.0) * (a + b + 3.0))
+        kurtosis = (excess_num / excess_den) + 3.0
+
+        fig.add_trace(go.Scatter(
+            x=(skew**2),
+            y=kurtosis,
+            mode='lines',
+            name=f'Beta (β = {ratio}·α)',
+            line=dict(color='purple',width=2),
+            hovertemplate=(
+                "<b>Beta (asymmetric)</b><br>"
+                "β/α: " + f"{ratio:.2f}" + "<br>"
+                "Skewness²: %{x:.3f}<br>"
+                "Kurtosis: %{y:.3f}<br>"
+                "<extra></extra>"
+            )
+        ))
 
 
 def _add_bootstrap_cloud(
