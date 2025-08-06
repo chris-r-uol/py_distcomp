@@ -36,6 +36,379 @@ SUPPORTED_DISTRIBUTIONS = {
     #'geometric': stats.geom,
 }
 
+def cullen_and_frey_plot(
+    data: Union[pd.Series, np.ndarray, list],
+    title: str = 'Cullen and Frey Graph',
+    data_name: str = 'Data',
+    n_bootstrap: int = 100,
+    show_bootstrap: bool = True,
+    show_theoretical: bool = True
+) -> go.Figure:
+    """
+    Create a Cullen and Frey plot for empirical data.
+    
+    A Cullen and Frey plot is a statistical diagnostic chart used to assess which 
+    probability distributions best fit a given dataset by plotting sample skewness 
+    squared on the horizontal axis and sample kurtosis on the vertical axis.
+    
+    The plot includes:
+    - A point representing the observed data's (skewness², kurtosis)
+    - Theoretical regions showing where common probability distributions fall
+    - Optional bootstrap cloud showing sampling variability
+    
+    Parameters
+    ----------
+    data : array-like
+        Input data as pandas Series, numpy array, or list.
+    title : str, default='Cullen and Frey Graph'
+        Plot title.
+    data_name : str, default='Data'
+        Name for the empirical data point.
+    n_bootstrap : int, default=100
+        Number of bootstrap samples for variability estimation.
+    show_bootstrap : bool, default=True
+        Whether to show bootstrap confidence cloud.
+    show_theoretical : bool, default=True
+        Whether to show theoretical distribution regions.
+        
+    Returns
+    -------
+    go.Figure
+        Plotly Figure object containing the Cullen and Frey plot.
+        
+    Raises
+    ------
+    ValueError
+        If data is empty, contains non-numeric values, or has insufficient points.
+    TypeError
+        If data type is not supported.
+        
+    Examples
+    --------
+    >>> # Basic Cullen and Frey plot
+    >>> cf_fig = cullen_and_frey_plot(data)
+    
+    >>> # With custom parameters
+    >>> cf_fig = cullen_and_frey_plot(
+    ...     data, 
+    ...     title='Distribution Assessment',
+    ...     n_bootstrap=200,
+    ...     show_bootstrap=True
+    ... )
+    """
+    # Validate and prepare data
+    clean_data = _validate_and_prepare_data(data)
+    
+    # Calculate observed skewness and kurtosis
+    obs_skew_sq, obs_kurtosis = _calculate_skewness_kurtosis(clean_data)
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add theoretical distribution regions if requested
+    if show_theoretical:
+        _add_theoretical_distributions(fig)
+    
+    # Add bootstrap cloud if requested
+    if show_bootstrap:
+        _add_bootstrap_cloud(fig, clean_data, n_bootstrap)
+    
+    # Add observed data point
+    fig.add_trace(go.Scatter(
+        x=[obs_skew_sq],
+        y=[obs_kurtosis],
+        mode='markers',
+        name=f'{data_name} (Observed)',
+        marker=dict(
+            size=12,
+            color='red',
+            symbol='diamond',
+            line=dict(width=2, color='darkred')
+        ),
+        hovertemplate=(
+            f"<b>{data_name}</b><br>"
+            "Skewness²: %{x:.3f}<br>"
+            "Kurtosis: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    ))
+    
+    # Configure layout
+    fig.update_layout(
+        title=dict(text=title, x=0.5, font=dict(size=16)),
+        xaxis=dict(
+            title='Skewness²',
+            showgrid=True,
+            gridcolor='lightgray',
+            range=[-0.5, max(10, obs_skew_sq + 2)]
+        ),
+        yaxis=dict(
+            title='Kurtosis',
+            showgrid=True,
+            gridcolor='lightgray',
+            range=[max(20, obs_kurtosis + 2), 0]
+        ),
+        template='plotly_white',
+        height=600,
+        width=800,
+        legend=dict(
+            x=0.98,
+            y=0.98,
+            xanchor='right',
+            yanchor='top',
+            bgcolor='rgba(255,255,255,0.9)',
+            bordercolor='gray',
+            borderwidth=1
+        ),
+        hovermode='closest'
+    )
+    
+    return fig
+
+
+def _calculate_skewness_kurtosis(data: np.ndarray) -> Tuple[float, float]:
+    """
+    Calculate sample skewness squared and kurtosis.
+    
+    Parameters
+    ----------
+    data : np.ndarray
+        Input data array.
+        
+    Returns
+    -------
+    Tuple[float, float]
+        Skewness squared and kurtosis values.
+    """
+    # Calculate moments
+    mean_val = np.mean(data)
+    std_val = np.std(data, ddof=1)
+    n = len(data)
+    
+    # Calculate skewness (using sample skewness formula)
+    skewness = stats.skew(data, bias=False)
+    skewness_squared = skewness ** 2
+    
+    # Calculate kurtosis (using sample excess kurtosis + 3)
+    kurtosis = stats.kurtosis(data, bias=False) + 3
+    
+    return skewness_squared, kurtosis
+
+
+def _add_theoretical_distributions(fig: go.Figure) -> None:
+    """
+    Add theoretical distribution points and regions to the plot.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        Plotly figure to add theoretical distributions to.
+    """
+    # Theoretical distribution points (skewness², kurtosis)
+    theoretical_points = {
+        'Normal': (0, 3),
+        'Uniform': (0, 1.8),
+        'Exponential': (4, 9),
+        'Chi-squared (df=1)': (8, 15),
+        'Chi-squared (df=4)': (2, 4.5),
+        'Logistic': (0, 4.2)
+    }
+    
+    # Add theoretical points
+    for dist_name, (skew_sq, kurt) in theoretical_points.items():
+        fig.add_trace(go.Scatter(
+            x=[skew_sq],
+            y=[kurt],
+            mode='markers',
+            name=dist_name,
+            marker=dict(
+                size=8,
+                symbol='circle',
+                line=dict(width=1, color='black')
+            ),
+            hovertemplate=(
+                f"<b>{dist_name}</b><br>"
+                "Skewness²: %{x:.3f}<br>"
+                "Kurtosis: %{y:.3f}<br>"
+                "<extra></extra>"
+            )
+        ))
+    
+    # Add lognormal curve
+    _add_lognormal_curve(fig)
+    
+    # Add gamma curve
+    _add_gamma_curve(fig)
+    
+    # Add beta curve
+    _add_beta_curve(fig)
+
+
+def _add_lognormal_curve(fig: go.Figure) -> None:
+    """
+    Add lognormal distribution curve to the plot.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        Plotly figure to add the curve to.
+    """
+    # Generate lognormal curve points
+    # For lognormal with log(X) ~ N(0, σ²), skewness² and kurtosis depend on σ
+    sigma_values = np.linspace(0.1, 2, 50)
+    skew_sq_values = []
+    kurtosis_values = []
+    
+    for sigma in sigma_values:
+        # Theoretical formulas for lognormal distribution
+        exp_sigma_sq = np.exp(sigma**2)
+        skewness = (exp_sigma_sq + 2) * np.sqrt(exp_sigma_sq - 1)
+        kurtosis = exp_sigma_sq**4 + 2*exp_sigma_sq**3 + 3*exp_sigma_sq**2 - 3
+        
+        skew_sq_values.append(skewness**2)
+        kurtosis_values.append(kurtosis)
+    
+    fig.add_trace(go.Scatter(
+        x=skew_sq_values,
+        y=kurtosis_values,
+        mode='lines',
+        name='Lognormal',
+        line=dict(color='blue', width=2, dash='dot'),
+        hovertemplate=(
+            "<b>Lognormal Distribution</b><br>"
+            "Skewness²: %{x:.3f}<br>"
+            "Kurtosis: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    ))
+
+
+def _add_gamma_curve(fig: go.Figure) -> None:
+    """
+    Add gamma distribution curve to the plot.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        Plotly figure to add the curve to.
+    """
+    # Generate gamma curve points
+    # For gamma distribution, skewness = 2/√k, kurtosis = 3 + 6/k
+    k_values = np.linspace(0.5, 10, 50)
+    skew_sq_values = []
+    kurtosis_values = []
+    
+    for k in k_values:
+        skewness = 2 / np.sqrt(k)
+        kurtosis = 3 + 6 / k
+        
+        skew_sq_values.append(skewness**2)
+        kurtosis_values.append(kurtosis)
+    
+    fig.add_trace(go.Scatter(
+        x=skew_sq_values,
+        y=kurtosis_values,
+        mode='lines',
+        name='Gamma',
+        line=dict(color='green', width=2, dash='dash'),
+        hovertemplate=(
+            "<b>Gamma Distribution</b><br>"
+            "Skewness²: %{x:.3f}<br>"
+            "Kurtosis: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    ))
+
+
+def _add_beta_curve(fig: go.Figure) -> None:
+    """
+    Add beta distribution curve to the plot.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        Plotly figure to add the curve to.
+    """
+    # Generate beta curve points for symmetric beta distributions (α = β)
+    alpha_values = np.linspace(0.5, 5, 30)
+    skew_sq_values = []
+    kurtosis_values = []
+    
+    for alpha in alpha_values:
+        # For symmetric beta (α = β), skewness = 0, kurtosis = 3(1+2α)/(2+3α)
+        skewness = 0
+        kurtosis = 3 * (1 + 2*alpha) / (2 + 3*alpha)
+        
+        skew_sq_values.append(skewness**2)
+        kurtosis_values.append(kurtosis)
+    
+    fig.add_trace(go.Scatter(
+        x=skew_sq_values,
+        y=kurtosis_values,
+        mode='lines',
+        name='Beta (symmetric)',
+        line=dict(color='purple', width=2, dash='dashdot'),
+        hovertemplate=(
+            "<b>Beta Distribution (symmetric)</b><br>"
+            "Skewness²: %{x:.3f}<br>"
+            "Kurtosis: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    ))
+
+
+def _add_bootstrap_cloud(
+    fig: go.Figure, 
+    data: np.ndarray, 
+    n_bootstrap: int
+) -> None:
+    """
+    Add bootstrap confidence cloud to the plot.
+    
+    Parameters
+    ----------
+    fig : go.Figure
+        Plotly figure to add bootstrap cloud to.
+    data : np.ndarray
+        Original data for bootstrap sampling.
+    n_bootstrap : int
+        Number of bootstrap samples to generate.
+    """
+    bootstrap_skew_sq = []
+    bootstrap_kurtosis = []
+    n = len(data)
+    
+    # Generate bootstrap samples
+    np.random.seed(42)  # For reproducibility
+    for _ in range(n_bootstrap):
+        # Bootstrap sample with replacement
+        bootstrap_sample = np.random.choice(data, size=n, replace=True)
+        
+        # Calculate skewness² and kurtosis for bootstrap sample
+        skew_sq, kurt = _calculate_skewness_kurtosis(bootstrap_sample)
+        
+        bootstrap_skew_sq.append(skew_sq)
+        bootstrap_kurtosis.append(kurt)
+    
+    # Add bootstrap cloud
+    fig.add_trace(go.Scatter(
+        x=bootstrap_skew_sq,
+        y=bootstrap_kurtosis,
+        mode='markers',
+        name='Bootstrap samples',
+        marker=dict(
+            size=4,
+            opacity=0.95,
+            color='orange',
+            symbol='circle'
+        ),
+        hovertemplate=(
+            "<b>Bootstrap Sample</b><br>"
+            "Skewness²: %{x:.3f}<br>"
+            "Kurtosis: %{y:.3f}<br>"
+            "<extra></extra>"
+        )
+    ))
 
 def quantile_comparison_plot(
     data: Union[pd.Series, np.ndarray, list],

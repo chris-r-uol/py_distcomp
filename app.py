@@ -1,5 +1,6 @@
 import streamlit as st
 import quantile_multi_comparison as qmc
+import empirical_plots as ep
 import numpy as np
 import pandas as pd
 
@@ -60,18 +61,47 @@ def main():
         st.session_state.data = data
         
     
-    which_distributions = st.multiselect("Select Distributions", options=qmc.SUPPORTED_DISTRIBUTIONS.keys(), default=['normal'])
+    
     data = st.session_state.get('data', None)
     
     
     if data is not None:
         with st.expander("Show Data"):
             st.dataframe(data, use_container_width=True)
-    
+        st.header('Empirical Data')
+        tabs2 = st.tabs(['Empirical Density Plot', 'Empirical CDF Plot'])
+        with tabs2[0]:
+            st.plotly_chart(ep.empirical_density_plot(data), use_container_width=True)
+        with tabs2[1]:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                show_percentiles = st.checkbox("Show Percentiles", value=True)
+            with c2:
+                percentile_lines=None
+                #percentile_lines = st.text_input(
+                #    "Percentile Lines (comma-separated, e.g. 25,50,75)",
+                #    value="25,50,75"
+                #)
+                #if percentile_lines:
+                #    percentile_lines = [float(p.strip()) for p in percentile_lines.split(',')]
+                #else:
+                #    percentile_lines = None
+            with c3:
+                show_annotations = st.checkbox("Show Annotations", value=True)
+            st.plotly_chart(ep.empirical_cdf_plot(data,show_percentiles=show_percentiles, percentile_lines=percentile_lines, show_annotations=show_annotations), use_container_width=True)
+        
+        st.header("Cullen and Frey Plot")
+        cf_fig = qmc.cullen_and_frey_plot(data)
+        st.plotly_chart(cf_fig, use_container_width=True)
+
+        st.header("Distribution Comparison Plots")
+        which_distributions = st.multiselect("Select Distributions", options=qmc.SUPPORTED_DISTRIBUTIONS.keys(), default=['normal'])
         qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
-        for fig in qq_fig:
-            st.plotly_chart(fig, use_container_width=True)
-    
+        
+        tabs = st.tabs(['Q-Q Plot', 'Histogram Overlay', 'P-P Plot', 'CDF Comparison'])
+        for i, fig in enumerate(qq_fig):
+            with tabs[i]:
+                st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("Please generate data first!")
 
