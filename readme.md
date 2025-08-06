@@ -263,7 +263,7 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 
 - Built with [Plotly](https://plotly.com/python/) for interactive visualizations
 - Statistical distributions provided by [SciPy](https://scipy.org/)
-- Inspired by R's `fitdistrplus` and `qqcomp` functions
+- Inspired by R's `fitdistrplus` package: [FitDistrPlus](https://cran.r-project.org/web/packages/fitdistrplus/index.html)
 - Demo app powered by [Streamlit](https://streamlit.io/)
 
 ## 📊 Roadmap
