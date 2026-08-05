@@ -22,6 +22,9 @@ from py_distcomp.mixture_plots import component_probability_plot, mixture_densit
 from py_distcomp.off_model import off_model_fraction  # noqa: E402
 from py_distcomp.quantile_multi_comparison import quantile_comparison_plot  # noqa: E402
 
+# numpy renamed trapz to trapezoid in 2.0; the suite supports both.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 def two_gumbels(n1=700, n2=300, seed=1, loc1=10, scale1=3, loc2=80, scale2=8):
     """A well-separated two-component Gumbel mixture with known parameters."""
@@ -163,7 +166,7 @@ def test_exponential_component_counts_one_parameter():
 def test_mixture_pdf_integrates_to_one():
     result = fit_mixture(two_gumbels(), ("gumbel", "gumbel"))
     grid = np.linspace(-50, 200, 20001)
-    assert np.trapezoid(result.dist.pdf(grid), grid) == pytest.approx(1.0, abs=1e-3)
+    assert _trapezoid(result.dist.pdf(grid), grid) == pytest.approx(1.0, abs=1e-3)
 
 
 def test_mixture_pdf_is_the_weighted_sum_of_components():
@@ -197,15 +200,14 @@ def test_mixture_ppf_handles_the_endpoints():
 
 
 def test_mixture_rvs_reproduces_its_own_parameters():
+    """A large draw should have the mixture's mean, w1·m1 + w2·m2."""
     result = fit_mixture(two_gumbels(), ("gumbel", "gumbel"))
     sample = result.dist.rvs(size=20000, random_state=0)
-    assert np.mean(sample) == pytest.approx(
-        np.trapezoid(
-            np.linspace(-50, 200, 20001) * result.dist.pdf(np.linspace(-50, 200, 20001)),
-            np.linspace(-50, 200, 20001),
-        ),
-        rel=0.05,
+    expected = sum(
+        w * dist.mean(*params)
+        for w, (dist, params) in zip(result.weights, result.components)
     )
+    assert np.mean(sample) == pytest.approx(expected, rel=0.05)
 
 
 def test_mixture_distribution_validates_its_weights():
