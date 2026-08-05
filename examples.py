@@ -6,9 +6,9 @@ This script demonstrates basic and advanced usage patterns.
 """
 
 import numpy as np
-import pandas as pd
 from scipy import stats
-from quantile_multi_comparison import quantile_comparison_plot
+
+from py_distcomp import quantile_comparison_plot
 
 
 def basic_example():
@@ -87,11 +87,14 @@ def financial_data_example():
     # Simulate daily returns (fat-tailed distribution)
     np.random.seed(789)
     returns = np.random.standard_t(df=4, size=1000) * 0.02
-    
-    # Compare against common financial distributions
+
+    # R's dt takes only degrees of freedom, so the 'student_t' name fits with
+    # loc = 0 and scale = 1 pinned -- useless for data on this scale. Pass the
+    # scipy object with explicit parameters to scale it instead.
     qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
         data=returns,
-        models=['normal', 'student_t', 'laplace'],
+        models=['normal', 'laplace', stats.t],
+        dist_params=[None, None, (4, 0.0, 0.02)],
         title='Financial Returns Distribution Analysis',
         data_name='Daily Returns'
     )
