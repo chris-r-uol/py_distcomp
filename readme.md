@@ -23,6 +23,18 @@ the fitdistrplus vignette, using the package's own `groundbeef` dataset.
 | `quantile_comparison_plot` | `qqcomp` + `denscomp` + `ppcomp` + `cdfcomp` |
 | `empirical_cdf_plot`, `empirical_density_plot` | `plotdist` (data only) |
 
+### Beyond fitdistrplus: the off-model fraction
+
+`off_model_fraction` and its plots implement the method of
+
+> Rushton, C.E., Tate, J.E. and Shepherd, S.P. (2021) "A novel method for comparing passenger car
+> fleets and identifying high-chance gross emitting vehicles using kerbside remote sensing data",
+> *Science of the Total Environment*, **750**, 142088.
+> [doi:10.1016/j.scitotenv.2020.142088](https://doi.org/10.1016/j.scitotenv.2020.142088)
+
+which extends the fitdistrplus workflow rather than reproducing it. See
+[Off-model fraction analysis](#-off-model-fraction-analysis) below.
+
 ## 🌟 Features
 
 - **Multi-Distribution Comparison**: Compare your data against multiple theoretical distributions simultaneously
@@ -353,6 +365,88 @@ def empirical_density_plot(
 
 Create an empirical density plot combining histogram with kernel density estimation.
 
+## 🎯 Off-model fraction analysis
+
+Sometimes most of a population follows one distribution but a small, high-valued subset does not.
+Fitting everything at once then gives parameters that describe neither group. The method of Rushton
+et al. (2021) finds that subset: cut the data at successively lower percentiles, refit, and measure
+how well the Q-Q relationship follows the 1:1 line. The percentile that maximises the fit is the
+**off-model percentile** `P_off`; the remaining `100 - P_off` per cent is the **off-model fraction**.
+In the paper those are candidate gross-emitting vehicles.
+
+```python
+from py_distcomp import (
+    off_model_fraction, qq_r_squared,
+    r_squared_sweep_plot, percentile_cut_qq_plot, off_model_density_plot,
+)
+
+result = off_model_fraction(emission_ratios, model='gumbel')
+
+result.percentile        # 95.0  -- P_off
+result.fraction          # 5.0   -- per cent off-model
+result.r_squared         # 0.991
+result.threshold         # data value at the cut
+result.fit.estimate      # {'loc': 11.2, 'scale': 8.3}  parameters of the bulk
+result.tail_fit.estimate # parameters of the off-model subset
+result.off_model_values  # the observations above the cut
+result.summary()         # one row, in the style of the paper's Table 1
+
+r_squared_sweep_plot(result).show()         # Figure 5
+percentile_cut_qq_plot(data, 'gumbel').show()  # Figure 6
+off_model_density_plot(result).show()       # bulk + tail superposition
+```
+
+Comparing population subsets is the point of the method, so the sweep plot takes a mapping:
+
+```python
+results = {
+    f'{euro} {fuel}': off_model_fraction(subset, 'gumbel')
+    for (euro, fuel), subset in fleet_subsets.items()
+}
+r_squared_sweep_plot(results, reference_line=0.98).show()
+```
+
+The Gumbel is the default because its location is the modal value and its scale describes the
+spread, so both parameters are directly comparable between subsets — the paper's reason for
+choosing it. Any registered distribution works.
+
+### `qq_r_squared`
+
+```python
+def qq_r_squared(
+    data, model='gumbel', dist_params=None,
+    method='identity', a_ppoints=0.5,
+) -> float
+```
+
+The goodness-of-fit measure behind the sweep. `'identity'` measures deviation from the 1:1 line,
+`1 - Σ(y - x)² / Σ(y - ȳ)²`, so location or scale error is penalised and the value can go negative.
+`'pearson'` is the squared correlation of the two quantile sets, which only measures how *straight*
+the Q-Q relationship is.
+
+> **On the choice of default.** The paper reports "the R² value of the relationship between the
+> empirical and theoretical quantiles" without giving a formula, but describes fit throughout as
+> agreement with the 1:1 line, so `'identity'` is the default. On contaminated samples the two agree
+> on `P_off` to within a percentile; `'identity'` simply falls further when the fit is poor. Pass
+> `method='pearson'` if you want the other reading.
+
+### `off_model_fraction`
+
+```python
+def off_model_fraction(
+    data, model='gumbel', percentiles=None, method='identity',
+    min_points=10, fit_tail=True, a_ppoints=0.5,
+) -> OffModelResult
+```
+
+`percentiles` defaults to every integer percentile from 1 to 100, where 100 means no cut — a clean
+sample returns `P_off = 100` and a zero fraction, as the paper found for pre-Euro 6 diesels.
+`fit_tail=True` runs the paper's second iteration, fitting the same family to the off-model
+observations so the population can be described as a superposition of two distributions.
+
+`OffModelResult.curve` holds the whole sweep — percentile, retained `n`, threshold, R² and the
+fitted parameters at each cut — which is the data behind Figure 5.
+
 ## 📈 Plot Types
 
 ### Q-Q Plot (Quantile-Quantile)
@@ -375,6 +469,15 @@ Visualizes the empirical cumulative distribution function as a step function, wi
 
 ### Empirical Density Plot
 Combines histogram representation with smooth kernel density estimation to show the empirical probability density function.
+
+### R² Sweep Plot
+R² against percentile cut, with the selected off-model percentile marked. Several population subsets can be overlaid for comparison.
+
+### Percentile-Cut Q-Q Grid
+A grid of Q-Q plots, one per cut, showing how the fitted location and scale respond as observations are removed from the top.
+
+### Off-Model Density Plot
+The population as a superposition of the distribution fitted to the retained data and the distribution fitted to the off-model tail, each weighted by its share of the population.
 
 ## 🎯 Use Cases
 
@@ -516,7 +619,8 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 
 - Built with [Plotly](https://plotly.com/python/) for interactive visualizations
 - Statistical distributions provided by [SciPy](https://scipy.org/)
-- Inspired by R's `fitdistrplus` package: [FitDistrPlus](https://cran.r-project.org/web/packages/fitdistrplus/index.html)
+- Ported from R's `fitdistrplus` package: [FitDistrPlus](https://cran.r-project.org/web/packages/fitdistrplus/index.html)
+- Off-model fraction method from [Rushton, Tate & Shepherd (2021)](https://doi.org/10.1016/j.scitotenv.2020.142088)
 - Demo app powered by [Streamlit](https://streamlit.io/)
 
 ## 📊 Roadmap
@@ -528,6 +632,7 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Bootstrap confidence regions for Cullen and Frey plots**
 - [x] **Goodness-of-fit statistics (KS, Cramér-von Mises, Anderson-Darling, chi-squared, AIC, BIC)**
 - [x] **Maximum-likelihood fitting in R's parameterisation**
+- [x] **Off-model fraction analysis (Rushton et al., 2021)**
 - [ ] Standard errors of the estimates (R's `fitdist` reports these from the Hessian)
 - [ ] Discrete distributions (Poisson, negative binomial, geometric) for fitting as well as plotting
 - [ ] Other estimation methods: moment matching (`mmedist`), quantile matching (`qmedist`), maximum goodness-of-fit (`mgedist`)
