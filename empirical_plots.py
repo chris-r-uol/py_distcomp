@@ -1,10 +1,24 @@
-from typing import Union, Tuple, List, Dict, Any, Optional
+"""
+Plots of an empirical distribution on its own, the equivalent of calling R's
+``plotdist(data)`` without a fitted distribution.
+
+As in ``plotdist``, the empirical CDF is drawn at R's plotting positions
+``ppoints(n)`` rather than at ``(1:n)/n``.
+"""
+
+from typing import List, Optional, Sequence, Union
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy import stats
-from scipy.optimize import minimize_scalar
-import streamlit as st
+
+try:  # works both as a package import and as a flat module import (app.py)
+    from .distributions import ppoints
+except ImportError:  # pragma: no cover
+    from distributions import ppoints
+
+__all__ = ["empirical_cdf_plot", "empirical_density_plot"]
 
 
 def empirical_cdf_plot(
@@ -15,7 +29,8 @@ def empirical_cdf_plot(
     height: int = 500,
     show_percentiles: bool = True,
     percentile_lines: Optional[List[float]] = None,
-    show_annotations: bool = True
+    show_annotations: bool = True,
+    a_ppoints: Optional[float] = None
 ) -> go.Figure:
     """
     Create an empirical CDF plot using Plotly Go.
@@ -33,7 +48,9 @@ def empirical_cdf_plot(
         show_percentiles: Whether to show common percentile lines (25th, 50th, 75th).
         percentile_lines: Custom percentiles to highlight (0-100).
         show_annotations: Whether to show annotations on percentile lines.
-        
+        a_ppoints: Offset for the plotting positions (i - a) / (n + 1 - 2a).
+            None uses R's ppoints default: 3/8 for n <= 10, 1/2 otherwise.
+
     Returns:
         Plotly Figure object containing the empirical CDF plot.
         
@@ -60,9 +77,8 @@ def empirical_cdf_plot(
     sorted_data = np.sort(data_clean)
     n = len(sorted_data)
     
-    # Calculate empirical CDF values
-    # Using (i+1)/n to avoid CDF values of 0 (more common convention)
-    cdf_values = np.arange(1, n + 1) / n
+    # Plotting positions, as R's plotdist uses: ppoints(n)
+    cdf_values = ppoints(n, a=a_ppoints)
     
     # Create figure
     fig = go.Figure()
@@ -170,7 +186,7 @@ def empirical_cdf_plot(
 def empirical_density_plot(
     data: Union[np.ndarray, pd.Series, List[float]], 
     name: str = "Data",
-    bins: int = 75,
+    bins: Union[int, str, Sequence[float]] = "sturges",
     kde_points: int = 1000,
     color_histogram: str = 'gray',
     color_density: str = 'seagreen',
@@ -187,7 +203,8 @@ def empirical_density_plot(
     Args:
         data: Input data for the empirical density plot.
         name: Name for the data series in the legend.
-        bins: Number of bins for the histogram.
+        bins: Histogram binning, passed to numpy.histogram_bin_edges. Defaults
+            to Sturges' rule, which is also the default used by R's hist().
         kde_points: Number of points for the KDE curve.
         color_histogram: Color for the histogram bars.
         color_density: Color for the density curve.
@@ -241,11 +258,16 @@ def empirical_density_plot(
     # Create figure
     fig = go.Figure()
     
-    # Add histogram of the underlying data
-    fig.add_trace(go.Histogram(
-        x=data_clean,
-        nbinsx=bins,
-        histnorm='probability density',
+    # Add histogram of the underlying data. Bin edges are computed explicitly so
+    # that the requested rule is honoured rather than re-guessed by plotly.
+    edges = np.histogram_bin_edges(data_clean, bins=bins)
+    counts, edges = np.histogram(data_clean, bins=edges, density=True)
+    centres = (edges[:-1] + edges[1:]) / 2
+
+    fig.add_trace(go.Bar(
+        x=centres,
+        y=counts,
+        width=np.diff(edges),
         name=f'{name} (Histogram)',
         marker=dict(
             color=color_histogram,
@@ -254,7 +276,7 @@ def empirical_density_plot(
         ),
         hovertemplate=(
             "Bin Center: %{x:.3f}<br>"
-            "Density: %{y:.3f}<br>"
+            "Density: %{y:.4f}<br>"
             "<extra></extra>"
         )
     ))
@@ -310,8 +332,8 @@ def empirical_density_plot(
             borderwidth=1
         ),
         hovermode='closest',
-        bargap=0.1,
+        bargap=0,
         margin=dict(l=50, r=50, t=50, b=50)
     )
-    
+
     return fig

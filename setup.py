@@ -8,8 +8,8 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="py_distcomp",
-    version="0.1.0",
-    author="Chris Russell",
+    version="0.2.0",
+    author="Chris Rushton",
     author_email="your.email@leeds.ac.uk",
     description="A professional Python library for comprehensive statistical distribution comparison and visualization",
     long_description=long_description,
@@ -33,6 +33,8 @@ setup(
     python_requires=">=3.8",
     install_requires=requirements,
     extras_require={
+        # Only the demo app needs streamlit; the library itself does not.
+        "app": ["streamlit>=1.0.0"],
         "dev": [
             "pytest>=6.0",
             "pytest-cov>=2.0",

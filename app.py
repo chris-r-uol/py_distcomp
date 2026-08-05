@@ -1,6 +1,7 @@
 import streamlit as st
 import quantile_multi_comparison as qmc
 import empirical_plots as ep
+import gofstat as gf
 import numpy as np
 import pandas as pd
 
@@ -90,18 +91,38 @@ def main():
                 show_annotations = st.checkbox("Show Annotations", value=True)
             st.plotly_chart(ep.empirical_cdf_plot(data,show_percentiles=show_percentiles, percentile_lines=percentile_lines, show_annotations=show_annotations), use_container_width=True)
         
+        st.header("Descriptive Statistics")
+        st.caption("Equivalent to R's descdist(). Kurtosis is not excess kurtosis: a normal distribution gives 3.")
+        summary = qmc.descdist(data)
+        st.dataframe(
+            pd.DataFrame([summary]).set_index('method'),
+            use_container_width=True,
+        )
+
         st.header("Cullen and Frey Plot")
-        cf_fig = qmc.cullen_and_frey_plot(data)
+        cf_fig = qmc.cullen_and_frey_plot(data, seed=42)
         st.plotly_chart(cf_fig, use_container_width=True)
 
         st.header("Distribution Comparison Plots")
         which_distributions = st.multiselect("Select Distributions", options=qmc.SUPPORTED_DISTRIBUTIONS.keys(), default=['normal'])
-        qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
-        
-        tabs = st.tabs(['Q-Q Plot', 'Histogram Overlay', 'P-P Plot', 'CDF Comparison'])
-        for i, fig in enumerate(qq_fig):
-            with tabs[i]:
-                st.plotly_chart(fig, use_container_width=True)
+
+        if which_distributions:
+            qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
+
+            tabs = st.tabs(['Q-Q Plot', 'Histogram Overlay', 'P-P Plot', 'CDF Comparison'])
+            for i, fig in enumerate(qq_fig):
+                with tabs[i]:
+                    st.plotly_chart(fig, use_container_width=True)
+
+            st.header("Goodness of Fit")
+            st.caption("Equivalent to R's gofstat(). Lower statistics, AIC and BIC indicate a better fit.")
+            try:
+                fits = gf.fit_distributions(data, which_distributions)
+                st.dataframe(gf.gofstat(fits), use_container_width=True)
+            except ValueError as exc:
+                st.warning(str(exc))
+        else:
+            st.info("Select at least one distribution to compare.")
     else:
         st.warning("Please generate data first!")
 
