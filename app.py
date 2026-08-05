@@ -4,6 +4,8 @@ import empirical_plots as ep
 import gofstat as gf
 import off_model as om
 import off_model_plots as omp
+import mixture as mx
+import mixture_plots as mxp
 import numpy as np
 import pandas as pd
 
@@ -165,6 +167,49 @@ def main():
                 st.plotly_chart(
                     omp.percentile_cut_qq_plot(data, om_model), use_container_width=True
                 )
+
+        st.header("Mixture Fit")
+        st.caption(
+            "Fits a superposition of distributions jointly by expectation-maximisation. "
+            "Unlike the hard cut above, every observation gets a probability of belonging "
+            "to each component."
+        )
+        options = list(qmc.SUPPORTED_DISTRIBUTIONS.keys())
+        c1, c2 = st.columns(2)
+        with c1:
+            comp1 = st.selectbox("Component 1", options=options,
+                                 index=options.index('gumbel'), key='mix1')
+        with c2:
+            comp2 = st.selectbox("Component 2", options=options,
+                                 index=options.index('gumbel'), key='mix2')
+
+        if st.button("Fit mixture"):
+            try:
+                with st.spinner("Running expectation-maximisation..."):
+                    mix = mx.fit_mixture(data, (comp1, comp2))
+            except ValueError as exc:
+                st.warning(str(exc))
+            else:
+                if not mix.converged:
+                    st.warning(
+                        f"EM stopped at the iteration limit ({mix.n_iter}) without converging."
+                    )
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Component 2 weight", f"{mix.weights[1] * 100:.1f}%")
+                m2.metric("AIC", f"{mix.aic:.1f}")
+                m3.metric("EM iterations", mix.n_iter)
+                st.dataframe(mix.summary().to_frame('value'), use_container_width=True)
+
+                mx_tabs = st.tabs(['Density', 'Component Probability', 'vs Single Fits'])
+                with mx_tabs[0]:
+                    st.plotly_chart(mxp.mixture_density_plot(mix), use_container_width=True)
+                with mx_tabs[1]:
+                    st.plotly_chart(
+                        mxp.component_probability_plot(mix), use_container_width=True
+                    )
+                with mx_tabs[2]:
+                    singles = gf.fit_distributions(data, [comp1, comp2])
+                    st.dataframe(gf.gofstat(singles + [mix]), use_container_width=True)
     else:
         st.warning("Please generate data first!")
 

@@ -35,6 +35,10 @@ the fitdistrplus vignette, using the package's own `groundbeef` dataset.
 which extends the fitdistrplus workflow rather than reproducing it. See
 [Off-model fraction analysis](#-off-model-fraction-analysis) below.
 
+`fit_mixture` estimates the same superposition jointly by expectation-maximisation, which is the
+principled version of the paper's percentile cut — see
+[Mixture fitting](#-mixture-fitting-superposition-of-distributions).
+
 ## 🌟 Features
 
 - **Multi-Distribution Comparison**: Compare your data against multiple theoretical distributions simultaneously
@@ -447,6 +451,96 @@ observations so the population can be described as a superposition of two distri
 `OffModelResult.curve` holds the whole sweep — percentile, retained `n`, threshold, R² and the
 fitted parameters at each cut — which is the data behind Figure 5.
 
+## 🔀 Mixture fitting: superposition of distributions
+
+The off-model method splits a population with a hard cut, then fits each side separately. That
+works, but the cut is chosen by a percentile search rather than by the likelihood, an observation
+belongs wholly to one side or the other, and the two fits never inform each other.
+
+`fit_mixture` estimates the same superposition properly:
+
+<p align="center"><i>f(x) = w<sub>1</sub> f<sub>1</sub>(x; θ<sub>1</sub>) + w<sub>2</sub> f<sub>2</sub>(x; θ<sub>2</sub>)</i></p>
+
+by expectation-maximisation, so the weights, both components' parameters and the assignment of
+observations are estimated jointly. Nothing is discarded, and every observation gets a **probability**
+of belonging to each component rather than a hard label — which is what "high-chance gross emitting
+vehicle" actually asks for.
+
+```python
+from py_distcomp import fit_mixture, mixture_density_plot, component_probability_plot
+
+mix = fit_mixture(emission_ratios, ('gumbel', 'gumbel'))
+
+mix.weights                  # array([0.959, 0.041])
+mix.estimate                 # {'weight1': 0.959, 'loc1': 11.8, 'scale1': 8.7,
+                             #  'weight2': 0.041, 'loc2': 82.4, 'scale2': 18.9}
+mix.component_probability()  # per-observation chance of being in the upper component
+mix.classify(threshold=0.9)  # boolean flags at a chosen confidence
+mix.expected_counts()        # array([959.4, 40.6])
+mix.aic, mix.bic, mix.loglik
+
+mixture_density_plot(mix).show()          # histogram, weighted components, their sum
+component_probability_plot(mix).show()    # P(upper component) against value
+```
+
+Components need not share a family — `('gumbel', 'normal')` is fine — and more than two are
+supported. The fitted mixture behaves like a scipy distribution, so it drops into everything else:
+
+```python
+from py_distcomp import fit_distributions, gofstat, quantile_comparison_plot
+
+# Compare a mixture against single distributions on the same footing
+gofstat(fit_distributions(data, ['gumbel', 'normal']) + [mix])
+#                        ks       cvm        ad    loglik      aic      bic
+# gumbel            0.061349  1.373640 10.484441 -4016.66  8037.32  8047.13
+# normal            0.177074 12.255646 71.072144 -4370.30  8744.60  8754.42
+# gumbel + gumbel   0.015558  0.037965  0.295380 -3923.05  7856.10  7880.64
+
+# And it plots like any other model
+quantile_comparison_plot(data, ['gumbel', mix.dist])
+```
+
+### `fit_mixture`
+
+```python
+def fit_mixture(
+    data, models=('gumbel', 'gumbel'), init='auto',
+    max_iter=500, tol=1e-8, min_points=5, min_weight=1e-4,
+) -> MixtureResult
+```
+
+`init` controls the starting partition, which matters because EM finds a *local* optimum:
+`'off_model'` seeds from the paper's percentile cut, `'quantile'` from equal-mass and tail-heavy
+splits, and `'auto'` (the default) tries both and keeps whichever reaches the higher likelihood.
+
+AIC and BIC count both components' free parameters plus `K - 1` weights, so a mixture can be
+compared against a single distribution honestly — the extra parameters are paid for.
+
+### Which should you use?
+
+| | Off-model cut | Mixture |
+|---|---|---|
+| Split chosen by | percentile search maximising Q-Q R² | maximum likelihood |
+| Observation assignment | hard, above/below a threshold | probability per observation |
+| Components inform each other | no | yes |
+| Reproduces the paper | yes | no — it's the improved version |
+| Comparable on AIC/BIC | not directly | yes |
+
+They agree closely in practice: on a sample with 5% injected contamination the cut gives a 4%
+off-model fraction and the mixture an upper weight of 0.041, with bulk parameters within a few per
+cent of each other. Use the cut to reproduce or extend the published analysis, and the mixture when
+you want a per-vehicle probability or a likelihood-based model comparison.
+
+### A caveat on identifiability
+
+When the two components overlap heavily — a small tail buried under a long-tailed bulk, which is
+exactly the vehicle-emissions case — the upper component's parameters are weakly identified even
+though its *weight* is recovered well. On the 5%-contamination example the injected tail is
+Gumbel(70, 25) and the fit returns Gumbel(82, 19): the weight and the classification are reliable,
+the individual tail parameters less so. This is a property of the data, not the algorithm; the EM
+is verified against `sklearn.mixture.GaussianMixture` to 4 decimal places where the models coincide.
+Check `mix.converged` and compare `mix.history` across `init` settings if in doubt.
+
 ## 📈 Plot Types
 
 ### Q-Q Plot (Quantile-Quantile)
@@ -478,6 +572,12 @@ A grid of Q-Q plots, one per cut, showing how the fitted location and scale resp
 
 ### Off-Model Density Plot
 The population as a superposition of the distribution fitted to the retained data and the distribution fitted to the off-model tail, each weighted by its share of the population.
+
+### Mixture Density Plot
+Histogram with each weighted component of a jointly fitted mixture and their sum.
+
+### Component Probability Plot
+Posterior probability of belonging to a component against value — the per-observation replacement for a hard cut.
 
 ## 🎯 Use Cases
 
@@ -633,12 +733,13 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Goodness-of-fit statistics (KS, Cramér-von Mises, Anderson-Darling, chi-squared, AIC, BIC)**
 - [x] **Maximum-likelihood fitting in R's parameterisation**
 - [x] **Off-model fraction analysis (Rushton et al., 2021)**
+- [x] **Mixture fitting by expectation-maximisation, with per-observation component probabilities**
 - [ ] Standard errors of the estimates (R's `fitdist` reports these from the Hessian)
 - [ ] Discrete distributions (Poisson, negative binomial, geometric) for fitting as well as plotting
 - [ ] Other estimation methods: moment matching (`mmedist`), quantile matching (`qmedist`), maximum goodness-of-fit (`mgedist`)
 - [ ] Bootstrap of the fitted parameters (`bootdist`)
-- [ ] Add more distribution types (mixture models, custom distributions)
 - [ ] Add confidence bands for Q-Q plots
+- [ ] Bootstrap confidence intervals on mixture weights and component parameters
 - [ ] Support for censored data analysis
 - [ ] Integration with statistical testing frameworks
 - [ ] Publication to PyPI

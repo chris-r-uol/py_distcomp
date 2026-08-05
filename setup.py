@@ -8,7 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="py_distcomp",
-    version="0.3.0",
+    version="0.4.0",
     author="Chris Rushton",
     author_email="your.email@leeds.ac.uk",
     description="A professional Python library for comprehensive statistical distribution comparison and visualization",
