@@ -25,12 +25,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import fit_distribution, ppoints, resolve_distribution
-    from .gofstat import FitResult, _r_estimate
-except ImportError:  # pragma: no cover
-    from distributions import fit_distribution, ppoints, resolve_distribution
-    from gofstat import FitResult, _r_estimate
+from .distributions import fit_distribution, ppoints, resolve_distribution
+from .gofstat import FitResult, _r_estimate
 
 __all__ = ["qq_r_squared", "off_model_fraction", "OffModelResult"]
 

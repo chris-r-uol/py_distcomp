@@ -13,14 +13,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import fit_distribution, ppoints, resolve_distribution
-    from .off_model import OffModelResult, off_model_fraction
-    from .quantile_multi_comparison import DISTRIBUTION_COLORS, _validate_and_prepare_data
-except ImportError:  # pragma: no cover
-    from distributions import fit_distribution, ppoints, resolve_distribution
-    from off_model import OffModelResult, off_model_fraction
-    from quantile_multi_comparison import DISTRIBUTION_COLORS, _validate_and_prepare_data
+from .distributions import fit_distribution, ppoints, resolve_distribution
+from .off_model import OffModelResult, off_model_fraction
+from .quantile_multi_comparison import DISTRIBUTION_COLORS, _validate_and_prepare_data
 
 __all__ = [
     "r_squared_sweep_plot",

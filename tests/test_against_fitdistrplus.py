@@ -20,10 +20,10 @@ from scipy import stats
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from distributions import fit_distribution, ppoints  # noqa: E402
-from empirical_plots import empirical_cdf_plot, empirical_density_plot  # noqa: E402
-from gofstat import fit_distributions, gofstat  # noqa: E402
-from quantile_multi_comparison import (  # noqa: E402
+from py_distcomp.distributions import fit_distribution, ppoints  # noqa: E402
+from py_distcomp.empirical_plots import empirical_cdf_plot, empirical_density_plot  # noqa: E402
+from py_distcomp.gofstat import fit_distributions, gofstat  # noqa: E402
+from py_distcomp.quantile_multi_comparison import (  # noqa: E402
     cullen_and_frey_plot,
     descdist,
     quantile_comparison_plot,

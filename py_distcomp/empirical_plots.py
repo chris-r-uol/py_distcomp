@@ -13,10 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from scipy import stats
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import ppoints
-except ImportError:  # pragma: no cover
-    from distributions import ppoints
+from .distributions import ppoints
 
 __all__ = ["empirical_cdf_plot", "empirical_density_plot"]
 

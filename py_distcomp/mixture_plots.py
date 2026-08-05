@@ -10,12 +10,8 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import plotly.graph_objects as go
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .mixture import MixtureResult
-    from .quantile_multi_comparison import DISTRIBUTION_COLORS
-except ImportError:  # pragma: no cover
-    from mixture import MixtureResult
-    from quantile_multi_comparison import DISTRIBUTION_COLORS
+from .mixture import MixtureResult
+from .quantile_multi_comparison import DISTRIBUTION_COLORS
 
 __all__ = ["mixture_density_plot", "component_probability_plot"]
 
