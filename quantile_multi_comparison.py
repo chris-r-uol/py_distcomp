@@ -551,6 +551,9 @@ def _setup_single_distribution(model, data, dist_params) -> Tuple[object, tuple,
         label = spec.r_name
 
     if dist_params is None:
+        # A fitted mixture carries its own parameters, so it needs none passed.
+        if getattr(dist, "n_params", None) == 0:
+            return dist, (), label
         if spec is None:
             raise ValueError(
                 "Unregistered scipy distributions require explicit dist_params"
@@ -559,7 +562,11 @@ def _setup_single_distribution(model, data, dist_params) -> Tuple[object, tuple,
         return dist, params, label
 
     params = tuple(dist_params.values()) if isinstance(dist_params, dict) else tuple(dist_params)
-    n_expected = len(dist.shapes.split(",")) + 2 if dist.shapes else 2
+    # A distribution may declare its own count; a fitted mixture carries its
+    # parameters internally and so declares zero.
+    n_expected = getattr(dist, "n_params", None)
+    if n_expected is None:
+        n_expected = len(dist.shapes.split(",")) + 2 if dist.shapes else 2
     if len(params) != n_expected:
         raise ValueError(
             f"{label} takes {n_expected} scipy parameters "

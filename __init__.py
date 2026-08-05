@@ -8,7 +8,8 @@ comparison plots, and gofstat goodness-of-fit statistics.
 
 It also provides the off-model fraction extension of Rushton, Tate & Shepherd
 (2021), which identifies the subset of a population that does not follow the
-fitted distribution.
+fitted distribution, and mixture fitting, which estimates the same
+superposition jointly by expectation-maximisation.
 """
 
 from .distributions import (
@@ -19,6 +20,8 @@ from .distributions import (
 )
 from .empirical_plots import empirical_cdf_plot, empirical_density_plot
 from .gofstat import FitResult, fit_distributions, gofstat
+from .mixture import MixtureDistribution, MixtureResult, fit_mixture
+from .mixture_plots import component_probability_plot, mixture_density_plot
 from .off_model import OffModelResult, off_model_fraction, qq_r_squared
 from .off_model_plots import (
     off_model_density_plot,
@@ -31,7 +34,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -55,4 +58,10 @@ __all__ = [
     "r_squared_sweep_plot",
     "percentile_cut_qq_plot",
     "off_model_density_plot",
+    # Mixture fitting
+    "fit_mixture",
+    "MixtureResult",
+    "MixtureDistribution",
+    "mixture_density_plot",
+    "component_probability_plot",
 ]

@@ -158,8 +158,10 @@ def gofstat(
 
     Parameters
     ----------
-    fits : FitResult or sequence of FitResult
-        Fits obtained from :func:`fit_distributions`.  All must share a dataset.
+    fits : FitResult, MixtureResult, or a sequence of them
+        Fits obtained from :func:`fit_distributions` or
+        :func:`~py_distcomp.fit_mixture`.  All must share a dataset, so a
+        mixture can be compared against single distributions on AIC and BIC.
     chisqbreaks : sequence of float, optional
         Cell boundaries for the chi-squared statistic.  If omitted they are
         derived from the data exactly as R does, targeting ``meancount``
@@ -179,18 +181,21 @@ def gofstat(
         Weibull and logistic distributions have tabulated critical values in
         fitdistrplus, so the other fits report ``'not computed'``.
     """
-    if isinstance(fits, FitResult):
+    # A single fit, or anything that duck-types one (a MixtureResult).
+    if not isinstance(fits, (list, tuple)):
         fits = [fits]
     fits = list(fits)
     if not fits:
         raise ValueError("At least one fit is required")
 
     odata = fits[0].data
+    sdata = np.sort(odata)
     for fit in fits[1:]:
-        if len(fit.data) != len(odata) or not np.allclose(fit.data, odata):
+        # Compared on sorted values: every statistic below uses the order
+        # statistics, and fits reaching here may have stored the sample sorted.
+        if len(fit.data) != len(sdata) or not np.allclose(np.sort(fit.data), sdata):
             raise ValueError("All compared fits must have been obtained with the same dataset")
 
-    sdata = np.sort(odata)
     n = len(sdata)
 
     if len(np.unique(sdata)) != n:
