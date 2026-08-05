@@ -16,11 +16,11 @@ from scipy import stats
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from gofstat import fit_distributions, gofstat  # noqa: E402
-from mixture import MixtureDistribution, fit_mixture  # noqa: E402
-from mixture_plots import component_probability_plot, mixture_density_plot  # noqa: E402
-from off_model import off_model_fraction  # noqa: E402
-from quantile_multi_comparison import quantile_comparison_plot  # noqa: E402
+from py_distcomp.gofstat import fit_distributions, gofstat  # noqa: E402
+from py_distcomp.mixture import MixtureDistribution, fit_mixture  # noqa: E402
+from py_distcomp.mixture_plots import component_probability_plot, mixture_density_plot  # noqa: E402
+from py_distcomp.off_model import off_model_fraction  # noqa: E402
+from py_distcomp.quantile_multi_comparison import quantile_comparison_plot  # noqa: E402
 
 
 def two_gumbels(n1=700, n2=300, seed=1, loc1=10, scale1=3, loc2=80, scale2=8):

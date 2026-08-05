@@ -94,25 +94,36 @@ Since this package is not yet published to PyPI, install directly from GitHub:
 pip install git+https://github.com/chris-r-uol/py_distcomp.git
 ```
 
-### Development Installation
+To include the demo app:
 
-For development or to run the demo app:
+```bash
+pip install "py_distcomp[app] @ git+https://github.com/chris-r-uol/py_distcomp.git"
+```
+
+### Development Installation
 
 ```bash
 git clone https://github.com/chris-r-uol/py_distcomp.git
 cd py_distcomp
-pip install -r requirements.txt
+pip install -e ".[app,dev]"
+```
+
+That gives an editable install with streamlit for the demo and pytest for the test suite:
+
+```bash
+pytest
 ```
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.9+
 - numpy
 - pandas
 - plotly
 - scipy
 
-`streamlit` is needed only for the demo app: `pip install py_distcomp[app]`.
+`streamlit` is needed only for the demo app, and is pulled in by the `[app]` extra. The library
+itself imports none of it.
 
 ## 📖 Quick Start
 
@@ -200,7 +211,13 @@ cf_fig = cullen_and_frey_plot(
 
 ## 🎛️ Demo Application
 
-Run the interactive Streamlit demo to explore functionality:
+If you installed the `[app]` extra, the demo has its own command:
+
+```bash
+py-distcomp-demo
+```
+
+From a checkout, this also works:
 
 ```bash
 streamlit run app.py
@@ -212,6 +229,8 @@ The demo app provides:
 - Multiple distribution comparison
 - Cullen and Frey plot for distribution assessment
 - Empirical data visualization with CDF and density plots
+- Off-model fraction analysis with the R² sweep and superposition plots
+- Mixture fitting with per-observation component probabilities
 - Export capabilities for generated plots
 
 ## 📚 API Reference

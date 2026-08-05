@@ -28,12 +28,9 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import fit_distribution, resolve_distribution
-    from .gofstat import _r_estimate
-except ImportError:  # pragma: no cover
-    from distributions import fit_distribution, resolve_distribution
-    from gofstat import _r_estimate
+from .distributions import fit_distribution, resolve_distribution
+from .gofstat import _r_estimate
+from .off_model import off_model_fraction
 
 __all__ = ["MixtureDistribution", "MixtureResult", "fit_mixture"]
 
@@ -381,10 +378,6 @@ def _split_starts(data: np.ndarray, models, init, min_points: int) -> List[List[
 
     if init in ("off_model", "auto") and n_comp == 2:
         try:
-            try:
-                from .off_model import off_model_fraction
-            except ImportError:  # pragma: no cover
-                from off_model import off_model_fraction
             result = off_model_fraction(data, models[0], min_points=min_points)
             if 0 < result.n_off_model < len(data):
                 candidates.append([data[data <= result.threshold],

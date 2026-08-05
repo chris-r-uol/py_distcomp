@@ -24,22 +24,13 @@ import pandas as pd
 import plotly.graph_objects as go
 from scipy import stats
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import (
-        DISTRIBUTION_SPECS,
-        SUPPORTED_DISTRIBUTIONS,
-        fit_distribution,
-        ppoints,
-        resolve_distribution,
-    )
-except ImportError:  # pragma: no cover
-    from distributions import (
-        DISTRIBUTION_SPECS,
-        SUPPORTED_DISTRIBUTIONS,
-        fit_distribution,
-        ppoints,
-        resolve_distribution,
-    )
+from .distributions import (
+    DISTRIBUTION_SPECS,
+    SUPPORTED_DISTRIBUTIONS,
+    fit_distribution,
+    ppoints,
+    resolve_distribution,
+)
 
 __all__ = [
     "SUPPORTED_DISTRIBUTIONS",

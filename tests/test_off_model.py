@@ -16,9 +16,9 @@ from scipy import stats
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from distributions import ppoints  # noqa: E402
-from off_model import off_model_fraction, qq_r_squared  # noqa: E402
-from off_model_plots import (  # noqa: E402
+from py_distcomp.distributions import ppoints  # noqa: E402
+from py_distcomp.off_model import off_model_fraction, qq_r_squared  # noqa: E402
+from py_distcomp.off_model_plots import (  # noqa: E402
     off_model_density_plot,
     percentile_cut_qq_plot,
     r_squared_sweep_plot,

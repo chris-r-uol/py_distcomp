@@ -18,10 +18,7 @@ from scipy import stats
 #: distribution, or when the sample is too small to apply them.
 NOT_COMPUTED = "not computed"
 
-try:  # works both as a package import and as a flat module import (app.py)
-    from .distributions import aic_bic, fit_distribution, resolve_distribution
-except ImportError:  # pragma: no cover
-    from distributions import aic_bic, fit_distribution, resolve_distribution
+from .distributions import aic_bic, fit_distribution, resolve_distribution
 
 __all__ = ["fit_distributions", "gofstat", "FitResult"]
 
