@@ -1,6 +1,8 @@
 
 # PyDistComp: Python Distribution Comparison Tool
 
+[![tests](https://github.com/chris-r-uol/py_distcomp/actions/workflows/tests.yml/badge.svg)](https://github.com/chris-r-uol/py_distcomp/actions/workflows/tests.yml)
+
 A Python port of the distribution-fitting and comparison workflow provided by R's
 [**fitdistrplus**](https://lbbe-software.github.io/fitdistrplus/) (Delignette-Muller & Dutang).
 PyDistComp provides Q-Q plots, P-P plots, CDF comparisons, histogram overlays, Cullen and Frey
