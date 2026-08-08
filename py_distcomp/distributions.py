@@ -28,6 +28,9 @@ __all__ = [
     "fit_distribution",
     "loglik",
     "aic_bic",
+    "r_estimate",
+    "scipy_params",
+    "observed_information",
 ]
 
 
@@ -247,3 +250,160 @@ def aic_bic(
     aic = -2.0 * ll + 2.0 * n_free_params
     bic = -2.0 * ll + np.log(n) * n_free_params
     return ll, float(aic), float(bic)
+
+
+# ---------------------------------------------------------------------------
+# Translating between scipy's parameterisation and R's
+# ---------------------------------------------------------------------------
+#
+# These two functions are inverses.  Keeping them side by side matters: the
+# standard errors ``fitdist`` reports are those of *R's* parameters, so the
+# log-likelihood has to be differentiated with respect to those rather than
+# scipy's.  For the gamma, for instance, R estimates a rate where scipy carries
+# a scale, and the two have different standard errors.
+
+def r_estimate(r_name: str, params: Sequence[float], spec=None) -> Dict[str, float]:
+    """Translate a scipy parameter tuple into the parameters R reports."""
+    p = tuple(float(x) for x in params)
+
+    if r_name == "norm":
+        return {"mean": p[0], "sd": p[1]}
+    if r_name == "lnorm":
+        # scipy: s = sdlog, scale = exp(meanlog)
+        return {"meanlog": float(np.log(p[2])), "sdlog": p[0]}
+    if r_name == "weibull":
+        return {"shape": p[0], "scale": p[2]}
+    if r_name == "gamma":
+        return {"shape": p[0], "rate": 1.0 / p[2]}
+    if r_name == "exp":
+        return {"rate": 1.0 / p[1]}
+    if r_name == "unif":
+        return {"min": p[0], "max": p[0] + p[1]}
+    if r_name == "pareto":
+        return {"shape": p[0], "scale": p[2]}
+    if r_name == "rayleigh":
+        return {"scale": p[1]}
+    if r_name in ("chisq", "t"):
+        return {"df": p[0]}
+    if r_name == "f":
+        return {"df1": p[0], "df2": p[1]}
+    if r_name == "beta":
+        return {"shape1": p[0], "shape2": p[1]}
+
+    # logis, laplace, cauchy, gumbel: (location, scale)
+    if spec is not None and len(spec.r_params) == len(p):
+        return dict(zip(spec.r_params, p))
+    return {f"par{i + 1}": v for i, v in enumerate(p)}
+
+
+def scipy_params(r_name: str, values: Sequence[float], spec=None) -> tuple:
+    """Translate R's parameter vector back into a full scipy parameter tuple.
+
+    The inverse of :func:`r_estimate`.  ``values`` must be in the order
+    :func:`r_estimate` returns them.
+    """
+    v = [float(x) for x in values]
+
+    if r_name == "norm":
+        return (v[0], v[1])
+    if r_name == "lnorm":
+        return (v[1], 0.0, float(np.exp(v[0])))
+    if r_name == "weibull":
+        return (v[0], 0.0, v[1])
+    if r_name == "gamma":
+        return (v[0], 0.0, 1.0 / v[1])
+    if r_name == "exp":
+        return (0.0, 1.0 / v[0])
+    if r_name == "unif":
+        return (v[0], v[1] - v[0])
+    if r_name == "pareto":
+        return (v[0], 0.0, v[1])
+    if r_name == "rayleigh":
+        return (0.0, v[0])
+    if r_name in ("chisq", "t"):
+        return (v[0], 0.0, 1.0)
+    if r_name == "f":
+        return (v[0], v[1], 0.0, 1.0)
+    if r_name == "beta":
+        return (v[0], v[1], 0.0, 1.0)
+
+    # logis, laplace, cauchy, gumbel: (location, scale)
+    return tuple(v)
+
+
+def _hessian(func, x: np.ndarray, rel_step: Optional[float] = None) -> np.ndarray:
+    """Symmetric numerical Hessian of ``func`` at ``x`` by central differences.
+
+    The step is scaled to each parameter's magnitude.  ``eps ** 0.25`` is the
+    usual compromise for second derivatives: large enough that the four function
+    values differ in more than rounding noise, small enough that the truncation
+    error stays negligible.
+    """
+    x = np.asarray(x, dtype=float)
+    n = len(x)
+    if rel_step is None:
+        rel_step = np.finfo(float).eps ** 0.25
+    h = rel_step * np.maximum(np.abs(x), 1.0)
+
+    out = np.empty((n, n))
+    for i in range(n):
+        for j in range(i, n):
+            ei = np.zeros(n)
+            ei[i] = h[i]
+            ej = np.zeros(n)
+            ej[j] = h[j]
+            value = (
+                func(x + ei + ej) - func(x + ei - ej)
+                - func(x - ei + ej) + func(x - ei - ej)
+            ) / (4.0 * h[i] * h[j])
+            out[i, j] = out[j, i] = value
+    return out
+
+
+def observed_information(
+    dist,
+    r_name: str,
+    r_values: Sequence[float],
+    data: np.ndarray,
+    spec=None,
+) -> Optional[np.ndarray]:
+    """Variance-covariance matrix of the estimates, in R's parameterisation.
+
+    The inverse of the observed information -- the Hessian of the summed
+    negative log-likelihood at the maximum.  This is what ``fitdist`` reports
+    standard errors from; R writes it as ``solve(hessian) / n`` because its
+    optimiser works with the *mean* negative log-likelihood, which comes to the
+    same thing.
+
+    Returns ``None`` when the Hessian is singular or not finite, as R does.
+    """
+    data = np.asarray(data, dtype=float)
+    values = np.asarray([float(x) for x in r_values])
+
+    def negll(theta):
+        try:
+            params = scipy_params(r_name, theta, spec)
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                logpdf = dist.logpdf(data, *params)
+        except (ValueError, ZeroDivisionError, FloatingPointError):
+            return np.inf
+        if not np.all(np.isfinite(logpdf)):
+            return np.inf
+        return -float(np.sum(logpdf))
+
+    if not np.isfinite(negll(values)):
+        return None
+
+    hessian = _hessian(negll, values)
+    if not np.all(np.isfinite(hessian)):
+        return None
+
+    # R checks the rank before inverting and returns NULL when it is deficient.
+    if np.linalg.matrix_rank(hessian) != hessian.shape[0]:
+        return None
+    try:
+        vcov = np.linalg.inv(hessian)
+    except np.linalg.LinAlgError:
+        return None
+
+    return vcov if np.all(np.isfinite(vcov)) else None

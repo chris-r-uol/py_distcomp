@@ -10,6 +10,8 @@ import pandas as pd
 import streamlit as st
 
 from py_distcomp import empirical_plots as ep
+from py_distcomp import bootdist as bd
+from py_distcomp import bootdist_plots as bdp
 from py_distcomp import gofstat as gf
 from py_distcomp import mixture as mx
 from py_distcomp import mixture_plots as mxp
@@ -125,6 +127,32 @@ def main():
             for i, fig in enumerate(qq_fig):
                 with tabs[i]:
                     st.plotly_chart(fig, use_container_width=True)
+
+            st.header("Parameter Uncertainty")
+            st.caption(
+                "Standard errors from the observed information, as R's fitdist reports them, "
+                "beside bootstrap percentile intervals."
+            )
+            unc_dist = st.selectbox(
+                "Distribution", options=which_distributions, key='unc_dist'
+            )
+            n_boot = st.slider("Bootstrap resamples", 100, 2000, 500, step=100)
+            if st.button("Compute intervals"):
+                try:
+                    one = gf.fit_distributions(data, unc_dist)[0]
+                    with st.spinner(f"Refitting {n_boot} resamples..."):
+                        boot = bd.bootdist(one, niter=n_boot, seed=42)
+                except ValueError as exc:
+                    st.warning(str(exc))
+                else:
+                    st.dataframe(boot.summary(), use_container_width=True)
+                    if boot.n_failed:
+                        st.warning(
+                            f"{boot.n_failed} of {boot.niter} refits failed and were dropped."
+                        )
+                    st.plotly_chart(
+                        bdp.bootdist_plot(boot), use_container_width=True
+                    )
 
             st.header("Goodness of Fit")
             st.caption("Equivalent to R's gofstat(). Lower statistics, AIC and BIC indicate a better fit.")

@@ -10,6 +10,10 @@ It also provides the off-model fraction extension of Rushton, Tate & Shepherd
 (2021), which identifies the subset of a population that does not follow the
 fitted distribution, and mixture fitting, which estimates the same
 superposition jointly by expectation-maximisation.
+
+Uncertainty on the estimates comes either from the observed information
+(``FitResult.std_error``, as ``fitdist`` reports it) or from the bootstrap
+(``bootdist``).
 """
 
 from .distributions import (
@@ -18,6 +22,8 @@ from .distributions import (
     fit_distribution,
     ppoints,
 )
+from .bootdist import BootdistResult, bootdist
+from .bootdist_plots import bootdist_plot, confint_plot
 from .empirical_plots import empirical_cdf_plot, empirical_density_plot
 from .gofstat import FitResult, fit_distributions, gofstat
 from .mixture import MixtureDistribution, MixtureResult, fit_mixture
@@ -34,7 +40,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -64,4 +70,9 @@ __all__ = [
     "MixtureDistribution",
     "mixture_density_plot",
     "component_probability_plot",
+    # Uncertainty
+    "bootdist",
+    "BootdistResult",
+    "bootdist_plot",
+    "confint_plot",
 ]

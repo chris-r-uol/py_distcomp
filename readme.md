@@ -21,6 +21,8 @@ the fitdistrplus vignette, using the package's own `groundbeef` dataset.
 | `descdist` | `descdist(..., graph = FALSE)` |
 | `cullen_and_frey_plot` | `descdist(..., graph = TRUE)` |
 | `fit_distributions` | `fitdist(..., method = "mle")` |
+| `FitResult.std_error` / `.vcov` / `.correlation` | `fitdist`'s `sd`, `vcov`, `cor` |
+| `bootdist` | `bootdist` |
 | `gofstat` | `gofstat` |
 | `quantile_comparison_plot` | `qqcomp` + `denscomp` + `ppcomp` + `cdfcomp` |
 | `empirical_cdf_plot`, `empirical_density_plot` | `plotdist` (data only) |
@@ -46,6 +48,7 @@ principled version of the paper's percentile cut — see
 - **Multi-Distribution Comparison**: Compare your data against multiple theoretical distributions simultaneously
 - **Maximum-Likelihood Fitting**: Parameter estimation matching `fitdist(..., method = "mle")`, reported in R's parameterisation
 - **Goodness-of-Fit Statistics**: Kolmogorov-Smirnov, Cramér-von Mises, Anderson-Darling and chi-squared statistics, with R's test decisions, plus AIC and BIC
+- **Uncertainty**: standard errors and correlations from the observed information, plus bootstrap confidence intervals on parameters and quantiles
 - **Interactive Visualizations**: Plotly plots with hover information and zoom
 - **Comprehensive Distribution Support**: 16 built-in distributions
 - **Custom Distribution Support**: Use any scipy.stats distribution object
@@ -136,7 +139,7 @@ numerically.
 ```python
 import numpy as np
 from py_distcomp import (
-    descdist, cullen_and_frey_plot, fit_distributions, gofstat,
+    descdist, cullen_and_frey_plot, fit_distributions, gofstat, bootdist,
     quantile_comparison_plot, empirical_cdf_plot, empirical_density_plot,
 )
 
@@ -165,6 +168,10 @@ qq_fig.show()
 gofstat(fits)
 #            ks       ks_test   cvm  cvm_test    ad   ad_test  ...  aic   bic
 # gamma      0.021  not rejected  ...
+
+# 6. Put uncertainty on the winner -- R's fitdist std errors and bootdist
+fits[0].summary()             # estimate and std_error, as fitdist prints
+bootdist(fits[0], seed=1).summary()   # percentile confidence intervals
 ```
 
 ### Empirical data on its own
@@ -390,6 +397,94 @@ def empirical_density_plot(
 
 Create an empirical density plot combining histogram with kernel density estimation.
 
+## 📏 Uncertainty on the estimates
+
+A fitted parameter without an interval can be reported but not compared. Two routes are available.
+
+### Standard errors, as `fitdist` reports them
+
+```python
+fit = fit_distributions(serving, 'weibull')[0]
+
+fit.summary()
+#        estimate  std_error
+# shape    2.1856     0.1046
+# scale   83.3467     2.5271
+
+fit.confint(0.95)     # Wald: estimate ± z · std_error
+fit.vcov              # variance-covariance matrix
+fit.correlation       # R's cov2cor(vcov)
+```
+
+These come from the observed information — the Hessian of the log-likelihood at the maximum, taken
+in **R's** parameterisation, so the standard error of a gamma `rate` is the rate's own, not that of
+scipy's `scale`. `vcov` is `None` where the Hessian is singular, as R returns `NULL`; the uniform is
+the usual case, its likelihood being flat inside the support.
+
+### Bootstrap intervals
+
+```python
+from py_distcomp import bootdist
+
+boot = bootdist(fit, niter=1001, seed=1)      # 'param' by default
+boot.summary()
+#        estimate     median      2.5%     97.5%
+# shape     2.186      2.189     2.003     2.419
+# scale    83.348     83.150    78.577    88.318
+
+boot.quantile_ci([0.5, 0.95])   # intervals on the distribution's own quantiles
+boot.estimates                  # every resample's parameters
+boot.n_converged, boot.n_failed
+```
+
+`bootmethod='param'` draws each resample from the fitted distribution, so the interval reflects
+sampling variability *under the assumed model*. `bootmethod='nonparam'` resamples the observed data
+with replacement and assumes nothing — the safer choice when the fit is imperfect.
+
+**Which to use.** The standard errors assume the log-likelihood is quadratic near its maximum. That
+is an asymptotic argument: for a small sample, or a parameter whose sampling distribution is skewed
+— a shape, or a scale near zero — the symmetric Wald interval can be poor, and can even run below
+zero for a parameter that cannot be negative. The bootstrap makes no such assumption but costs
+`niter` refits (about a second for 1001, on a simple distribution). They agree closely when both are
+valid, which is itself a useful check.
+
+### Comparing population subsets
+
+This is the comparison a table of bare estimates cannot support — whether two subsets really differ:
+
+```python
+from py_distcomp import confint_plot
+
+fleets = {
+    label: bootdist(fit_distributions(subset, 'gumbel')[0], niter=1001, seed=1)
+    for label, subset in fleet_subsets.items()
+}
+confint_plot(fleets, parameter='loc').show()
+```
+
+`bootdist_plot(boot)` shows the resampled parameter cloud (R's `plot.bootdist`). A diagonal smear
+means the parameters trade off against one another and cannot be read independently.
+
+### Bootstrapping a mixture
+
+`bootdist` also accepts a `MixtureResult`, which is the only route to uncertainty there — the weights
+and component parameters come out of expectation-maximisation rather than a single optimisation, so
+there is no Hessian to invert. This turns the identifiability caveat below from a warning into a
+number:
+
+```python
+bootdist(mix, niter=400, seed=1).summary()
+#          estimate  median    2.5%   97.5%
+# weight1     0.959   0.959   0.943   0.973
+# loc1       11.799  11.794  11.215  12.431
+# weight2     0.041   0.041   0.027   0.057    <- the fraction is well determined
+# loc2       82.415  82.281  68.752  90.696    <- its location is not
+```
+
+The refit is warm-started from the original fit, which is both far faster and keeps the component
+ordering stable — without it components could swap between resamples and the percentiles would be
+meaningless.
+
 ## 🎯 Off-model fraction analysis
 
 Sometimes most of a population follows one distribution but a small, high-valued subset does not.
@@ -560,7 +655,7 @@ though its *weight* is recovered well. On the 5%-contamination example the injec
 Gumbel(70, 25) and the fit returns Gumbel(82, 19): the weight and the classification are reliable,
 the individual tail parameters less so. This is a property of the data, not the algorithm; the EM
 is verified against `sklearn.mixture.GaussianMixture` to 4 decimal places where the models coincide.
-Check `mix.converged` and compare `mix.history` across `init` settings if in doubt.
+Run `bootdist(mix)` to see how wide that uncertainty actually is, and check `mix.converged`.
 
 ## 📈 Plot Types
 
@@ -596,6 +691,12 @@ The population as a superposition of the distribution fitted to the retained dat
 
 ### Mixture Density Plot
 Histogram with each weighted component of a jointly fitted mixture and their sum.
+
+### Bootstrap Parameter Cloud
+The resampled parameter estimates, one panel per pair, with the original estimate marked. R's `plot.bootdist`.
+
+### Confidence Interval Plot
+Estimates with their intervals, several fits side by side, for comparing population subsets.
 
 ### Component Probability Plot
 Posterior probability of belonging to a component against value — the per-observation replacement for a hard cut.
@@ -755,12 +856,11 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Maximum-likelihood fitting in R's parameterisation**
 - [x] **Off-model fraction analysis (Rushton et al., 2021)**
 - [x] **Mixture fitting by expectation-maximisation, with per-observation component probabilities**
-- [ ] Standard errors of the estimates (R's `fitdist` reports these from the Hessian)
+- [x] **Standard errors, variance-covariance and correlation of the estimates**
+- [x] **Bootstrap confidence intervals (`bootdist`), including on mixture weights**
 - [ ] Discrete distributions (Poisson, negative binomial, geometric) for fitting as well as plotting
 - [ ] Other estimation methods: moment matching (`mmedist`), quantile matching (`qmedist`), maximum goodness-of-fit (`mgedist`)
-- [ ] Bootstrap of the fitted parameters (`bootdist`)
 - [ ] Add confidence bands for Q-Q plots
-- [ ] Bootstrap confidence intervals on mixture weights and component parameters
 - [ ] Support for censored data analysis
 - [ ] Integration with statistical testing frameworks
 - [ ] Publication to PyPI

@@ -18,7 +18,13 @@ from scipy import stats
 #: distribution, or when the sample is too small to apply them.
 NOT_COMPUTED = "not computed"
 
-from .distributions import aic_bic, fit_distribution, resolve_distribution
+from .distributions import (
+    aic_bic,
+    fit_distribution,
+    observed_information,
+    r_estimate as _r_estimate,
+    resolve_distribution,
+)
 
 __all__ = ["fit_distributions", "gofstat", "FitResult"]
 
@@ -55,13 +61,16 @@ class FitResult:
     loglik, aic, bic : float
         As defined in ``fitdist``: ``aic = -2 loglik + 2 npar``,
         ``bic = -2 loglik + log(n) npar``.
+    model : str or scipy distribution
+        The specification the fit came from, kept so that a bootstrap can refit.
     """
 
-    def __init__(self, name, dist, params, data, spec=None):
+    def __init__(self, name, dist, params, data, spec=None, model=None):
         self.name = name
         self.dist = dist
         self.params = tuple(params)
         self.spec = spec
+        self.model = name if model is None else model
         self.r_name = spec.r_name if spec is not None else getattr(dist, "name", name)
         self.data = np.asarray(data, dtype=float)
         self.n = len(self.data)
@@ -69,51 +78,96 @@ class FitResult:
         self.n_free_params = npar
         self.loglik, self.aic, self.bic = aic_bic(dist, self.params, self.data, npar)
         self.estimate = _r_estimate(self.r_name, self.params, spec)
+        self._vcov_cache = False
+        self._vcov = None
+
+    # -- uncertainty of the estimates ---------------------------------------
+
+    @property
+    def vcov(self) -> Optional[pd.DataFrame]:
+        """Variance-covariance matrix of the estimates, or ``None``.
+
+        The inverse observed information, in R's parameterisation, as
+        ``fitdist`` reports it.  ``None`` when the Hessian is singular -- the
+        uniform is the usual case, its likelihood not being differentiable at
+        the maximum.
+        """
+        if not self._vcov_cache:
+            self._vcov_cache = True
+            matrix = observed_information(
+                self.dist, self.r_name, list(self.estimate.values()),
+                self.data, self.spec,
+            )
+            if matrix is not None:
+                names = list(self.estimate)
+                self._vcov = pd.DataFrame(matrix, index=names, columns=names)
+        return self._vcov
+
+    @property
+    def std_error(self) -> Dict[str, float]:
+        """Standard errors of the estimates -- ``fitdist``'s "Std. Error".
+
+        Values are ``nan`` where the variance-covariance matrix is unavailable
+        or a variance comes out negative, which signals the optimum was not
+        reached cleanly.
+        """
+        vcov = self.vcov
+        if vcov is None:
+            return {k: float("nan") for k in self.estimate}
+        variances = np.diag(vcov.to_numpy())
+        with np.errstate(invalid="ignore"):
+            errors = np.where(variances >= 0, np.sqrt(np.abs(variances)), np.nan)
+        return dict(zip(self.estimate, (float(e) for e in errors)))
+
+    @property
+    def correlation(self) -> Optional[pd.DataFrame]:
+        """Correlation matrix of the estimates -- R's ``cov2cor(vcov)``."""
+        vcov = self.vcov
+        if vcov is None:
+            return None
+        matrix = vcov.to_numpy()
+        sd = np.sqrt(np.diag(matrix))
+        if not np.all(np.isfinite(sd)) or np.any(sd <= 0):
+            return None
+        return pd.DataFrame(matrix / np.outer(sd, sd),
+                            index=vcov.index, columns=vcov.columns)
+
+    def confint(self, level: float = 0.95) -> pd.DataFrame:
+        """Wald confidence intervals, ``estimate ± z · standard error``.
+
+        Symmetric and asymptotic.  For a small sample, or a parameter whose
+        sampling distribution is skewed -- a shape or a scale near zero --
+        prefer the percentile intervals from
+        :func:`~py_distcomp.bootdist`.
+        """
+        if not 0 < level < 1:
+            raise ValueError("level must lie strictly between 0 and 1")
+        z = stats.norm.ppf(0.5 + level / 2)
+        errors = self.std_error
+        return pd.DataFrame(
+            {
+                "estimate": list(self.estimate.values()),
+                "std_error": [errors[k] for k in self.estimate],
+                "lower": [self.estimate[k] - z * errors[k] for k in self.estimate],
+                "upper": [self.estimate[k] + z * errors[k] for k in self.estimate],
+            },
+            index=list(self.estimate),
+        )
+
+    def summary(self) -> pd.DataFrame:
+        """Estimates with their standard errors, as ``fitdist`` prints them."""
+        errors = self.std_error
+        return pd.DataFrame(
+            {
+                "estimate": list(self.estimate.values()),
+                "std_error": [errors[k] for k in self.estimate],
+            },
+            index=list(self.estimate),
+        )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         pretty = ", ".join(f"{k}={v:.6g}" for k, v in self.estimate.items())
         return f"FitResult({self.name}: {pretty})"
-
-
-def _r_estimate(r_name: str, params: Sequence[float], spec) -> Dict[str, float]:
-    """Translate a scipy parameter tuple into the parameters R reports.
-
-    scipy and R disagree on several parameterisations -- scipy's lognormal is
-    ``(s, loc, scale)`` where R's is ``(meanlog, sdlog)``, and scipy's gamma and
-    exponential use a scale where R uses a rate.
-    """
-    p = tuple(float(x) for x in params)
-
-    if r_name == "norm":
-        return {"mean": p[0], "sd": p[1]}
-    if r_name == "lnorm":
-        # scipy: s = sdlog, scale = exp(meanlog)
-        return {"meanlog": float(np.log(p[2])), "sdlog": p[0]}
-    if r_name == "weibull":
-        return {"shape": p[0], "scale": p[2]}
-    if r_name == "gamma":
-        return {"shape": p[0], "rate": 1.0 / p[2]}
-    if r_name == "exp":
-        return {"rate": 1.0 / p[1]}
-    if r_name == "unif":
-        return {"min": p[0], "max": p[0] + p[1]}
-    if r_name == "pareto":
-        return {"shape": p[0], "scale": p[2]}
-    if r_name == "rayleigh":
-        return {"scale": p[1]}
-    if r_name == "chisq":
-        return {"df": p[0]}
-    if r_name == "t":
-        return {"df": p[0]}
-    if r_name == "f":
-        return {"df1": p[0], "df2": p[1]}
-    if r_name == "beta":
-        return {"shape1": p[0], "shape2": p[1]}
-
-    # logis, laplace, cauchy, gumbel: (location, scale)
-    if spec is not None and len(spec.r_params) == len(p):
-        return dict(zip(spec.r_params, p))
-    return {f"par{i + 1}": v for i, v in enumerate(p)}
 
 
 def fit_distributions(
@@ -135,7 +189,7 @@ def fit_distributions(
         dist, spec = resolve_distribution(model)
         _, params = fit_distribution(model, clean)
         name = model if isinstance(model, str) else getattr(dist, "name", str(model))
-        results.append(FitResult(name, dist, params, clean, spec))
+        results.append(FitResult(name, dist, params, clean, spec, model=model))
     return results
 
 
