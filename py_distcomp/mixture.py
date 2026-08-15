@@ -429,12 +429,16 @@ def fit_mixture(
         One distribution name or scipy object per component.  Families may
         differ, e.g. ``('gumbel', 'normal')``.  Two components describe the
         bulk-plus-outlier structure of Rushton et al. (2021).
-    init : {'auto', 'off_model', 'quantile'}, default='auto'
+    init : {'auto', 'off_model', 'quantile'} or MixtureResult, default='auto'
         How to seed the EM.  ``'off_model'`` uses the percentile cut of
         :func:`~py_distcomp.off_model_fraction`, the paper's own split.
         ``'quantile'`` uses equal-mass and tail-heavy splits.  ``'auto'`` tries
         both and keeps whichever converges to the higher likelihood.  EM finds
         a local optimum, so the starting point matters.
+
+        Passing an already fitted mixture warm-starts from its parameters and
+        runs a single EM pass, which is much faster.  This is how
+        :func:`~py_distcomp.bootdist` refits a mixture on each resample.
     max_iter : int, default=500
         Maximum EM iterations.
     tol : float, default=1e-8
@@ -476,18 +480,36 @@ def fit_mixture(
     models = list(models)
     if len(models) < 2:
         raise ValueError("A mixture needs at least two components")
-    if init not in ("auto", "off_model", "quantile"):
-        raise ValueError("init must be 'auto', 'off_model' or 'quantile'")
+
+    warm_start = _as_warm_start(init)
+    if warm_start is None and init not in ("auto", "off_model", "quantile"):
+        raise ValueError(
+            "init must be 'auto', 'off_model', 'quantile', or a fitted mixture "
+            "to start from"
+        )
 
     specs = [resolve_distribution(m) for m in models]
     n_free = sum(
         len(_free_parameter_layout(dist, spec)[0]) for dist, spec in specs
     ) + (len(models) - 1)
 
+    if warm_start is not None:
+        if warm_start.n_components != len(models):
+            raise ValueError(
+                f"The mixture to start from has {warm_start.n_components} "
+                f"components but {len(models)} were requested"
+            )
+        starts = [(list(warm_start.components), np.array(warm_start.weights))]
+    else:
+        starts = [
+            _initial_from_partition(models, partition, len(clean), min_weight)
+            for partition in _split_starts(clean, models, init, min_points)
+        ]
+
     best = None
-    for partition in _split_starts(clean, models, init, min_points):
+    for components, weights in starts:
         try:
-            candidate = _run_em(clean, models, specs, partition,
+            candidate = _run_em(clean, models, specs, components, weights,
                                 max_iter, tol, min_weight, n_free)
         except (ValueError, RuntimeError, FloatingPointError):
             continue
@@ -509,16 +531,29 @@ def fit_mixture(
     return best
 
 
-def _run_em(data, models, specs, partition, max_iter, tol, min_weight, n_free):
-    """One EM run from a given starting partition."""
-    n = len(data)
+def _as_warm_start(init):
+    """Return the mixture to start from, when ``init`` names one."""
+    if isinstance(init, MixtureDistribution):
+        return init
+    dist = getattr(init, "dist", None)
+    return dist if isinstance(dist, MixtureDistribution) else None
+
+
+def _initial_from_partition(models, partition, n, min_weight):
+    """Fit each component to its slice of a starting partition."""
     components: List[Tuple[object, tuple]] = []
     weights = []
-    for (dist, spec), model, part in zip(specs, models, partition):
-        _, params = fit_distribution(model, part)
+    for model, part in zip(models, partition):
+        dist, params = fit_distribution(model, part)
         components.append((dist, params))
         weights.append(max(len(part) / n, min_weight))
-    weights = np.asarray(weights) / np.sum(weights)
+    return components, np.asarray(weights) / np.sum(weights)
+
+
+def _run_em(data, models, specs, components, weights, max_iter, tol, min_weight, n_free):
+    """One EM run from given starting parameters."""
+    components = list(components)
+    weights = np.asarray(weights, dtype=float)
 
     history: List[float] = []
     previous = -np.inf
