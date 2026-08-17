@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from .distributions import fit_distribution, resolve_distribution
+from .distributions import density, fit_distribution, is_discrete, log_density, resolve_distribution
 from .gofstat import _r_estimate
 from .off_model import off_model_fraction
 
@@ -80,6 +80,9 @@ class MixtureDistribution:
 
     def _stack(self, method: str, x: np.ndarray) -> np.ndarray:
         """(n_components, n) array of a per-component method applied to x."""
+        if method == "pdf":
+            # density() picks pmf for a discrete component.
+            return np.vstack([density(d, x, p) for d, p in self.components])
         return np.vstack([
             getattr(dist, method)(x, *params) for dist, params in self.components
         ])
@@ -184,8 +187,10 @@ def _free_parameter_layout(dist, spec) -> Tuple[List[int], List[bool], int]:
     optimised on a log scale; the location is unconstrained.
     """
     n_shapes = len(dist.shapes.split(",")) if dist.shapes else 0
-    n_total = n_shapes + 2
-    loc_i, scale_i = n_shapes, n_shapes + 1
+    discrete = spec.discrete if spec is not None else is_discrete(dist)
+    n_total = n_shapes + (1 if discrete else 2)
+    loc_i = n_shapes
+    scale_i = -1 if discrete else n_shapes + 1
 
     fixed = spec.fixed if spec is not None else {}
     indices, positive = [], []
@@ -220,7 +225,7 @@ def _weighted_mle(dist, spec, data: np.ndarray, weights: np.ndarray, start: tupl
     def negll(z):
         trial = unpack(z)
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            logpdf = dist.logpdf(data, *trial)
+            logpdf = log_density(dist, data, trial)
         if not np.all(np.isfinite(logpdf)):
             return np.inf
         return -float(np.sum(weights * logpdf))
@@ -563,7 +568,7 @@ def _run_em(data, models, specs, components, weights, max_iter, tol, min_weight,
     for iteration in range(1, max_iter + 1):
         # E step: responsibilities under the current parameters.
         with np.errstate(under="ignore"):
-            densities = np.vstack([d.pdf(data, *p) for d, p in components])
+            densities = np.vstack([density(d, data, p) for d, p in components])
         weighted = densities * weights[:, None]
         total = weighted.sum(axis=0)
         if not np.all(np.isfinite(total)) or np.all(total <= 0):

@@ -27,7 +27,9 @@ from scipy import stats
 from .distributions import (
     DISTRIBUTION_SPECS,
     SUPPORTED_DISTRIBUTIONS,
+    density,
     fit_distribution,
+    is_discrete,
     ppoints,
     resolve_distribution,
 )
@@ -713,7 +715,10 @@ def _create_multi_cdf_plot(
 
     # R plots the empirical CDF at ppoints(n, a = 0.5) for continuous data,
     # with horizontal steps and points (horizontals = TRUE, verticals = FALSE).
-    obsp = ppoints(n, a=a_ppoints)
+    # For discrete data cdfcomp falls back to (1:n)/n, because ppoints would
+    # place the steps off the integers where the mass actually sits.
+    discrete = any(is_discrete(d) for d, _, _ in distributions)
+    obsp = np.arange(1, n + 1) / n if discrete else ppoints(n, a=a_ppoints)
 
     fig.add_trace(go.Scatter(
         x=empirical_data,
@@ -729,12 +734,13 @@ def _create_multi_cdf_plot(
         ),
     ))
 
-    sfin = np.linspace(empirical_data.min(), empirical_data.max(), fitnbpts)
+    sfin = _fit_grid(empirical_data, fitnbpts, discrete)
     for i, (distribution, params, label) in enumerate(distributions):
         fig.add_trace(go.Scatter(
             x=sfin,
             y=distribution.cdf(sfin, *params),
             mode="lines",
+            line_shape="hv" if discrete else "linear",
             name=label,
             line=dict(color=DISTRIBUTION_COLORS[i % len(DISTRIBUTION_COLORS)], width=2),
             hovertemplate=(
@@ -764,35 +770,51 @@ def _create_multi_histogram_plot(
     """Histogram with fitted densities -- R's ``denscomp``.
 
     ``bins`` defaults to Sturges' rule, which is also R's ``hist`` default.
+    For a discrete fit the empirical bars become relative frequencies at each
+    observed count and the fitted curves become probability masses, drawn as
+    markers joined by thin lines rather than as a continuous density.
     """
     fig = go.Figure()
+    discrete = any(is_discrete(d) for d, _, _ in distributions)
 
-    edges = np.histogram_bin_edges(data, bins=bins)
-    counts, edges = np.histogram(data, bins=edges, density=True)
-    centres = (edges[:-1] + edges[1:]) / 2
+    if discrete:
+        # One bar per integer, holding the proportion of the sample at it.
+        values = np.arange(int(np.min(data)), int(np.max(data)) + 1)
+        counts = np.array([np.sum(data == v) for v in values]) / len(data)
+        centres, widths = values.astype(float), np.full(len(values), 0.85)
+        y_title = "Probability"
+        hover = "Value: %{x:.0f}<br>Proportion: %{y:.4f}<extra></extra>"
+    else:
+        edges = np.histogram_bin_edges(data, bins=bins)
+        counts, edges = np.histogram(data, bins=edges, density=True)
+        centres, widths = (edges[:-1] + edges[1:]) / 2, np.diff(edges)
+        y_title = "Density"
+        hover = "Bin centre: %{x:.3f}<br>Density: %{y:.4f}<extra></extra>"
 
     fig.add_trace(go.Bar(
         x=centres,
         y=counts,
-        width=np.diff(edges),
+        width=widths,
         name=f"{name} (empirical)",
         marker=dict(color="gray", opacity=0.7,
                     line=dict(width=0.5, color="white")),
-        hovertemplate=("Bin centre: %{x:.3f}<br>Density: %{y:.4f}<extra></extra>"),
+        hovertemplate=hover,
     ))
 
-    sfin = np.linspace(data.min(), data.max(), fitnbpts)
+    sfin = _fit_grid(data, fitnbpts, discrete)
     for i, (distribution, params, label) in enumerate(distributions):
         fig.add_trace(go.Scatter(
             x=sfin,
-            y=distribution.pdf(sfin, *params),
-            mode="lines",
+            y=density(distribution, sfin, params),
+            mode="markers+lines" if discrete else "lines",
             name=label,
-            line=dict(color=DISTRIBUTION_COLORS[i % len(DISTRIBUTION_COLORS)], width=2),
+            marker=dict(size=7) if discrete else None,
+            line=dict(color=DISTRIBUTION_COLORS[i % len(DISTRIBUTION_COLORS)],
+                      width=1 if discrete else 2),
             hovertemplate=(
                 f"<b>{label}</b><br>"
                 "Value: %{x:.3f}<br>"
-                "Density: %{y:.4f}<extra></extra>"
+                f"{'Probability' if discrete else 'Density'}: %{{y:.4f}}<extra></extra>"
             ),
         ))
 
@@ -809,11 +831,24 @@ def _create_multi_histogram_plot(
     _finish(
         fig, title,
         xaxis=dict(title="data", showgrid=True, gridcolor="lightgray"),
-        yaxis=dict(title="Density", showgrid=True, gridcolor="lightgray"),
+        yaxis=dict(title=y_title, showgrid=True, gridcolor="lightgray"),
         legend_x=0.98, legend_xanchor="right",
     )
-    fig.update_layout(bargap=0)
+    fig.update_layout(bargap=0 if not discrete else 0.15)
     return fig
+
+
+def _fit_grid(data: np.ndarray, fitnbpts: int, discrete: bool) -> np.ndarray:
+    """Points at which to evaluate a fitted distribution.
+
+    Continuous fits get an evenly spaced grid; discrete fits are evaluated on
+    the integers, where all their mass lies.  R does the same, rounding its
+    ``seq`` to whole numbers when ``discrete`` is set.
+    """
+    low, high = float(np.min(data)), float(np.max(data))
+    if discrete:
+        return np.arange(int(np.floor(low)), int(np.ceil(high)) + 1, dtype=float)
+    return np.linspace(low, high, fitnbpts)
 
 
 def _finish(

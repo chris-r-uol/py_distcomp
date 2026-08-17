@@ -189,7 +189,8 @@ def empirical_density_plot(
     color_density: str = 'seagreen',
     opacity_histogram: float = 0.7,
     width: int = 700,
-    height: int = 500
+    height: int = 500,
+    discrete: bool = False
 ) -> go.Figure:
     """
     Create an empirical density plot using Plotly Go.
@@ -203,6 +204,9 @@ def empirical_density_plot(
         bins: Histogram binning, passed to numpy.histogram_bin_edges. Defaults
             to Sturges' rule, which is also the default used by R's hist().
         kde_points: Number of points for the KDE curve.
+        discrete: Treat the data as counts: draw one bar per integer holding its
+            relative frequency, and omit the kernel density estimate, which
+            assumes a continuous distribution.
         color_histogram: Color for the histogram bars.
         color_density: Color for the density curve.
         opacity_histogram: Opacity level for histogram bars (0-1).
@@ -234,21 +238,24 @@ def empirical_density_plot(
     if len(data_clean) < 2:
         raise ValueError("At least 2 data points required for density estimation")
     
-    # Calculate kernel density estimation
+    # Calculate kernel density estimation. A KDE assumes a continuous
+    # distribution, so it is skipped entirely for counts.
+    x_values = y_values = None
     try:
-        density = stats.gaussian_kde(data_clean)
-        data_min, data_max = np.min(data_clean), np.max(data_clean)
-        
-        # Add small padding to avoid edge effects
-        data_range = data_max - data_min
-        padding = data_range * 0.05
-        x_values = np.linspace(
-            data_min - padding, 
-            data_max + padding, 
-            kde_points
-        )
-        y_values = density(x_values)
-        
+        if not discrete:
+            density = stats.gaussian_kde(data_clean)
+            data_min, data_max = np.min(data_clean), np.max(data_clean)
+
+            # Add small padding to avoid edge effects
+            data_range = data_max - data_min
+            padding = data_range * 0.05
+            x_values = np.linspace(
+                data_min - padding,
+                data_max + padding,
+                kde_points
+            )
+            y_values = density(x_values)
+
     except Exception as e:
         raise RuntimeError(f"Failed to compute kernel density estimation: {e}")
     
@@ -257,14 +264,19 @@ def empirical_density_plot(
     
     # Add histogram of the underlying data. Bin edges are computed explicitly so
     # that the requested rule is honoured rather than re-guessed by plotly.
-    edges = np.histogram_bin_edges(data_clean, bins=bins)
-    counts, edges = np.histogram(data_clean, bins=edges, density=True)
-    centres = (edges[:-1] + edges[1:]) / 2
+    if discrete:
+        values = np.arange(int(np.min(data_clean)), int(np.max(data_clean)) + 1)
+        counts = np.array([np.sum(data_clean == v) for v in values]) / len(data_clean)
+        centres, widths = values.astype(float), np.full(len(values), 0.85)
+    else:
+        edges = np.histogram_bin_edges(data_clean, bins=bins)
+        counts, edges = np.histogram(data_clean, bins=edges, density=True)
+        centres, widths = (edges[:-1] + edges[1:]) / 2, np.diff(edges)
 
     fig.add_trace(go.Bar(
         x=centres,
         y=counts,
-        width=np.diff(edges),
+        width=widths,
         name=f'{name} (Histogram)',
         marker=dict(
             color=color_histogram,
@@ -278,24 +290,25 @@ def empirical_density_plot(
         )
     ))
     
-    # Add empirical density line
-    fig.add_trace(go.Scatter(
-        x=x_values, 
-        y=y_values, 
-        mode='lines', 
-        name=f'{name} (KDE)',
-        line=dict(
-            color=color_density,
-            width=2,
-            dash='solid'
-        ),
-        hovertemplate=(
-            "Value: %{x:.3f}<br>"
-            "Density: %{y:.3f}<br>"
-            "<extra></extra>"
-        ),
-        opacity=1.0
-    ))
+    # Add empirical density line (continuous data only)
+    if x_values is not None:
+        fig.add_trace(go.Scatter(
+            x=x_values,
+            y=y_values,
+            mode='lines',
+            name=f'{name} (KDE)',
+            line=dict(
+                color=color_density,
+                width=2,
+                dash='solid'
+            ),
+            hovertemplate=(
+                "Value: %{x:.3f}<br>"
+                "Density: %{y:.3f}<br>"
+                "<extra></extra>"
+            ),
+            opacity=1.0
+        ))
     
     # Update layout
     fig.update_layout(

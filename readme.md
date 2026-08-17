@@ -50,7 +50,7 @@ principled version of the paper's percentile cut — see
 - **Goodness-of-Fit Statistics**: Kolmogorov-Smirnov, Cramér-von Mises, Anderson-Darling and chi-squared statistics, with R's test decisions, plus AIC and BIC
 - **Uncertainty**: standard errors and correlations from the observed information, plus bootstrap confidence intervals on parameters and quantiles
 - **Interactive Visualizations**: Plotly plots with hover information and zoom
-- **Comprehensive Distribution Support**: 16 built-in distributions
+- **Comprehensive Distribution Support**: 19 built-in distributions, continuous and discrete
 - **Custom Distribution Support**: Use any scipy.stats distribution object
 - **Multiple Plot Types**: Q-Q plots, P-P plots, CDF comparisons, histogram overlays, Cullen and Frey graphs
 - **Empirical Data Analysis**: Dedicated empirical CDF and density plots with kernel density estimation
@@ -82,6 +82,25 @@ makes the estimates, log-likelihoods and AIC/BIC values agree with R.
 | Chi-squared | `'chi2'` | `chisq` | df | `loc = 0`, `scale = 1` |
 | Student's t | `'student_t'` | `t` | df | `loc = 0`, `scale = 1` |
 | F-distribution | `'f'` | `f` | df1, df2 | `loc = 0`, `scale = 1` |
+
+### Discrete
+
+| Distribution | String Key | R name | Estimated parameters | Pinned in scipy |
+|---|---|---|---|---|
+| Poisson | `'poisson'` | `pois` | lambda | `loc = 0` |
+| Negative binomial | `'negative_binomial'` | `nbinom` | size, mu | `loc = 0` |
+| Geometric | `'geometric'` | `geom` | prob | `loc = -1` |
+
+These live on the non-negative integers and raise an error for negative or non-integer data, as R
+does. Three scipy differences are handled for you:
+
+- scipy's discrete distributions have **no `fit` method**, so the estimators are implemented here —
+  closed forms for the Poisson and geometric, and a one-dimensional search for the negative
+  binomial, whose `mu` is the sample mean whatever `size` turns out to be.
+- scipy exposes **`logpmf` rather than `logpdf`**, so everything that scores a fit goes through a
+  helper that picks the right one.
+- **scipy's `geom` starts at 1** where R's `dgeom` starts at 0, hence the `loc = -1`. Without it
+  every probability would be shifted by one.
 
 R's own names are accepted as aliases, so `'lnorm'`, `'exp'`, `'norm'` and `'unif'` work too. As in
 R, `beta` is defined on [0, 1] and raises an error for data outside that range.
@@ -396,6 +415,55 @@ def empirical_density_plot(
 ```
 
 Create an empirical density plot combining histogram with kernel density estimation.
+
+## 🔢 Count data
+
+Discrete fits go through the same functions; pass a discrete name and everything downstream adapts.
+
+```python
+from py_distcomp import fit_distributions, gofstat, quantile_comparison_plot
+
+counts = np.random.default_rng(0).negative_binomial(4, 0.4, 2000)
+
+fits = fit_distributions(counts, ['poisson', 'negative_binomial', 'geometric'])
+gofstat(fits)
+#                     ks  ks_test    chisq  chisq_pvalue      aic
+# poisson            NaN  not computed  312.4      0.000    9421.6
+# negative_binomial  NaN  not computed    9.1      0.334    9016.3
+# geometric          NaN  not computed  180.7      0.000    9284.1
+
+quantile_comparison_plot(counts, ['poisson', 'negative_binomial'])
+```
+
+**`gofstat` reports the chi-squared statistic alone for a discrete fit.** That is R's behaviour, and
+the reason is real: the Kolmogorov-Smirnov, Cramér-von Mises and Anderson-Darling statistics all
+compare an empirical step function against a *continuous* one, and their tabulated critical values
+do not apply when the fitted distribution has jumps. AIC and BIC are still comparable across
+families, so use those and the chi-squared p-value.
+
+The plots adapt too: the density panel draws probability masses at the integers against bars of
+relative frequency, and the CDF panel plots the empirical points at `(1:n)/n` rather than at
+`ppoints`, as `cdfcomp` does when `discrete = TRUE` — `ppoints` would place the steps off the
+integers where the mass actually sits.
+
+`empirical_density_plot(counts, discrete=True)` does the same for data on its own, and omits the
+kernel density estimate, which assumes a continuous distribution.
+
+### Over-dispersed counts as a mixture
+
+Two Poisson regimes are often a better description of over-dispersed counts than one negative
+binomial, and say something more interpretable — that the population contains two kinds of thing:
+
+```python
+from py_distcomp import fit_mixture
+
+mix = fit_mixture(counts, ('poisson', 'poisson'))
+mix.estimate            # {'weight1': 0.70, 'lambda1': 1.94, 'weight2': 0.30, 'lambda2': 11.5}
+mix.component_probability()   # per-observation chance of the high-rate regime
+```
+
+`descdist` and `cullen_and_frey_plot(discrete=True)` remain the way to choose a family in the first
+place — the graph's negative binomial region and Poisson line are drawn for exactly this case.
 
 ## 📏 Uncertainty on the estimates
 
@@ -858,7 +926,7 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Mixture fitting by expectation-maximisation, with per-observation component probabilities**
 - [x] **Standard errors, variance-covariance and correlation of the estimates**
 - [x] **Bootstrap confidence intervals (`bootdist`), including on mixture weights**
-- [ ] Discrete distributions (Poisson, negative binomial, geometric) for fitting as well as plotting
+- [x] **Discrete distributions: Poisson, negative binomial and geometric**
 - [ ] Other estimation methods: moment matching (`mmedist`), quantile matching (`qmedist`), maximum goodness-of-fit (`mgedist`)
 - [ ] Add confidence bands for Q-Q plots
 - [ ] Support for censored data analysis
