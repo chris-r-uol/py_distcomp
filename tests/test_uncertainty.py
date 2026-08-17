@@ -45,10 +45,11 @@ def weibull_fit(groundbeef):
 def test_scipy_params_inverts_r_estimate(groundbeef):
     """SEs are of R's parameters, so the two mappings must agree exactly."""
     positive = np.abs(groundbeef)
+    counts = np.round(positive / 10.0)  # whole numbers, for the discrete families
     for name, spec in DISTRIBUTION_SPECS.items():
         if spec.support is not None:
             continue  # beta needs data on [0, 1]
-        _, params = fit_distribution(name, positive)
+        _, params = fit_distribution(name, counts if spec.discrete else positive)
         values = list(r_estimate(spec.r_name, params, spec).values())
         assert np.allclose(scipy_params(spec.r_name, values, spec), params), name
 

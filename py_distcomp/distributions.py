@@ -17,7 +17,7 @@ all place their empirical points with it.
 from typing import Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from scipy import stats
+from scipy import optimize, stats
 
 __all__ = [
     "DistributionSpec",
@@ -31,6 +31,10 @@ __all__ = [
     "r_estimate",
     "scipy_params",
     "observed_information",
+    "DISCRETE_DISTRIBUTIONS",
+    "is_discrete",
+    "log_density",
+    "density",
 ]
 
 
@@ -53,17 +57,29 @@ class DistributionSpec:
         Range the data must lie in, when R's version is restricted (beta only).
     """
 
-    def __init__(self, dist, r_name, fixed=None, r_params=(), support=None):
+    def __init__(self, dist, r_name, fixed=None, r_params=(), support=None,
+                 discrete=False):
         self.dist = dist
         self.r_name = r_name
         self.fixed = dict(fixed or {})
         self.r_params = tuple(r_params)
         self.support = support
+        self.discrete = discrete
 
     @property
     def n_free_params(self) -> int:
         """Number of parameters actually estimated -- R's ``length(estimate)``."""
         return len(self.r_params)
+
+    @property
+    def n_scipy_params(self) -> int:
+        """Length of the full scipy parameter tuple.
+
+        Discrete distributions carry a location but no scale, so their tuple is
+        one shorter than a continuous one's.
+        """
+        n_shapes = len(self.dist.shapes.split(",")) if self.dist.shapes else 0
+        return n_shapes + (1 if self.discrete else 2)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"DistributionSpec({self.r_name!r}, fixed={self.fixed!r})"
@@ -124,7 +140,27 @@ DISTRIBUTION_SPECS: Dict[str, DistributionSpec] = {
     "f": DistributionSpec(
         stats.f, "f", {"floc": 0, "fscale": 1}, ("df1", "df2")
     ),
+    # --- discrete ------------------------------------------------------------
+    # scipy's discrete distributions carry a location but no scale, and none of
+    # them has a ``fit`` method, so these are estimated in ``_fit_discrete``.
+    "poisson": DistributionSpec(
+        stats.poisson, "pois", {"floc": 0}, ("lambda",), discrete=True
+    ),
+    "negative_binomial": DistributionSpec(
+        stats.nbinom, "nbinom", {"floc": 0}, ("size", "mu"), discrete=True
+    ),
+    "geometric": DistributionSpec(
+        # R's dgeom counts failures before the first success, so it is supported
+        # on 0, 1, 2, ...; scipy's geom counts trials and starts at 1.  The
+        # shift of -1 makes the two agree.
+        stats.geom, "geom", {"floc": -1}, ("prob",), discrete=True
+    ),
 }
+
+#: Names of the distributions that live on the integers.
+DISCRETE_DISTRIBUTIONS = tuple(
+    name for name, spec in DISTRIBUTION_SPECS.items() if spec.discrete
+)
 
 # Backwards-compatible view: name -> scipy distribution object.
 SUPPORTED_DISTRIBUTIONS: Dict[str, object] = {
@@ -190,6 +226,89 @@ def resolve_distribution(model: Union[str, object]) -> Tuple[object, Optional[Di
     )
 
 
+def is_discrete(dist) -> bool:
+    """Whether a scipy distribution is supported on the integers."""
+    return isinstance(dist, stats.rv_discrete) or (
+        not hasattr(dist, "pdf") and hasattr(dist, "pmf")
+    )
+
+
+def log_density(dist, x, params) -> np.ndarray:
+    """Log density or log probability mass, whichever the distribution has.
+
+    scipy names these differently -- ``logpdf`` on a continuous distribution,
+    ``logpmf`` on a discrete one -- so everything that scores a fit goes
+    through here.
+    """
+    fn = dist.logpmf if is_discrete(dist) else dist.logpdf
+    return fn(np.asarray(x, dtype=float), *params)
+
+
+def density(dist, x, params) -> np.ndarray:
+    """Density or probability mass, whichever the distribution has."""
+    fn = dist.pmf if is_discrete(dist) else dist.pdf
+    return fn(np.asarray(x, dtype=float), *params)
+
+
+def _check_counts(data: np.ndarray, r_name: str) -> None:
+    """Discrete distributions need non-negative whole numbers, as R does."""
+    if np.any(data < 0) or np.any(data != np.round(data)):
+        raise ValueError(
+            f"The {r_name} distribution is defined on the non-negative "
+            "integers; the data contains negative or non-integer values"
+        )
+
+
+def _fit_discrete(spec: DistributionSpec, data: np.ndarray) -> tuple:
+    """Maximum likelihood for the discrete distributions, in scipy's terms.
+
+    scipy's discrete distributions have no ``fit`` method, so these are done
+    directly.  The Poisson and geometric estimators are closed forms; the
+    negative binomial's mean is a closed form, leaving one parameter to search.
+    """
+    _check_counts(data, spec.r_name)
+    mean = float(np.mean(data))
+
+    if spec.r_name == "pois":
+        # lambda-hat is the sample mean.
+        return (mean, 0.0)
+
+    if spec.r_name == "geom":
+        # For R's parameterisation the mean is (1 - p)/p, so p = 1/(1 + mean).
+        prob = 1.0 / (1.0 + mean) if mean > 0 else 1.0
+        return (prob, -1.0)
+
+    if spec.r_name == "nbinom":
+        if mean <= 0:
+            raise ValueError(
+                "The negative binomial cannot be fitted to all-zero data"
+            )
+        # mu-hat is the sample mean whatever the size, leaving a one-dimensional
+        # search over size, done on a log scale so it stays positive.
+        def negll(log_size):
+            size = np.exp(log_size)
+            prob = size / (size + mean)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                total = np.sum(stats.nbinom.logpmf(data, size, prob))
+            return np.inf if not np.isfinite(total) else -total
+
+        # Moment matching gives the starting bracket, as R's startargdefault does.
+        variance = float(np.var(data, ddof=0))
+        start = mean ** 2 / (variance - mean) if variance > mean else 100.0
+        start = float(np.clip(start, 1e-3, 1e6))
+
+        result = optimize.minimize_scalar(
+            negll,
+            bracket=(np.log(start) - 1.0, np.log(start) + 1.0),
+            bounds=(np.log(1e-8), np.log(1e8)),
+            method="bounded",
+        )
+        size = float(np.exp(result.x))
+        return (size, size / (size + mean), 0.0)
+
+    raise ValueError(f"No discrete estimator for '{spec.r_name}'")
+
+
 def fit_distribution(
     model: Union[str, object],
     data: np.ndarray,
@@ -197,11 +316,14 @@ def fit_distribution(
     """Fit ``model`` to ``data`` by maximum likelihood, as ``fitdist(..., 'mle')``.
 
     Returns the scipy distribution and the full scipy parameter tuple
-    (shapes + loc + scale), with loc/scale pinned wherever R's version of the
-    distribution has no such parameter.
+    (shapes + loc + scale, or shapes + loc for a discrete distribution), with
+    loc/scale pinned wherever R's version has no such parameter.
     """
     dist, spec = resolve_distribution(model)
     data = np.asarray(data, dtype=float)
+
+    if spec is not None and spec.discrete:
+        return dist, _fit_discrete(spec, data)
 
     if spec is None:
         # Unregistered scipy distribution: nothing to pin, fit everything.
@@ -227,8 +349,7 @@ def fit_distribution(
 
 def loglik(dist: object, params: Sequence[float], data: np.ndarray) -> float:
     """Log-likelihood of ``data`` under ``dist(*params)``."""
-    logpdf = dist.logpdf(np.asarray(data, dtype=float), *params)
-    return float(np.sum(logpdf))
+    return float(np.sum(log_density(dist, data, params)))
 
 
 def aic_bic(
@@ -289,6 +410,14 @@ def r_estimate(r_name: str, params: Sequence[float], spec=None) -> Dict[str, flo
         return {"df1": p[0], "df2": p[1]}
     if r_name == "beta":
         return {"shape1": p[0], "shape2": p[1]}
+    if r_name == "pois":
+        return {"lambda": p[0]}
+    if r_name == "geom":
+        return {"prob": p[0]}
+    if r_name == "nbinom":
+        # scipy: (size, prob); R reports the mean instead of the probability.
+        size, prob = p[0], p[1]
+        return {"size": size, "mu": size * (1.0 - prob) / prob}
 
     # logis, laplace, cauchy, gumbel: (location, scale)
     if spec is not None and len(spec.r_params) == len(p):
@@ -326,6 +455,13 @@ def scipy_params(r_name: str, values: Sequence[float], spec=None) -> tuple:
         return (v[0], v[1], 0.0, 1.0)
     if r_name == "beta":
         return (v[0], v[1], 0.0, 1.0)
+    if r_name == "pois":
+        return (v[0], 0.0)
+    if r_name == "geom":
+        return (v[0], -1.0)
+    if r_name == "nbinom":
+        size, mu = v[0], v[1]
+        return (size, size / (size + mu), 0.0)
 
     # logis, laplace, cauchy, gumbel: (location, scale)
     return tuple(v)
@@ -384,7 +520,7 @@ def observed_information(
         try:
             params = scipy_params(r_name, theta, spec)
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                logpdf = dist.logpdf(data, *params)
+                logpdf = log_density(dist, data, params)
         except (ValueError, ZeroDivisionError, FloatingPointError):
             return np.inf
         if not np.all(np.isfinite(logpdf)):

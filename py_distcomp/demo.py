@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from py_distcomp import distributions as dists
 from py_distcomp import empirical_plots as ep
 from py_distcomp import bootdist as bd
 from py_distcomp import bootdist_plots as bdp
@@ -42,7 +43,7 @@ def main():
         # Distribution selection
         distribution_type = st.selectbox(
             "Select distribution type",
-            options=["normal", "gamma", "exponential", "uniform"],
+            options=["normal", "gamma", "exponential", "uniform", "poisson", "negative binomial"],
             index=0
         )
         
@@ -58,6 +59,11 @@ def main():
         elif distribution_type == "uniform":
             low = st.number_input("Low", value=0.0, step=0.1)
             high = st.number_input("High", value=1.0, step=0.1)
+        elif distribution_type == "poisson":
+            lam = st.number_input("Lambda", value=3.0, min_value=0.1, step=0.1)
+        elif distribution_type == "negative binomial":
+            nb_size = st.number_input("Size", value=4.0, min_value=0.1, step=0.1)
+            nb_mu = st.number_input("Mu (mean)", value=6.0, min_value=0.1, step=0.1)
         
         # Form submit button
         submitted = st.form_submit_button("Generate Data")
@@ -72,12 +78,20 @@ def main():
             data = np.random.exponential(scale=scale, size=n_points)
         elif distribution_type == "uniform":
             data = np.random.uniform(low=low, high=high, size=n_points)
+        elif distribution_type == "poisson":
+            data = np.random.poisson(lam=lam, size=n_points).astype(float)
+        elif distribution_type == "negative binomial":
+            data = np.random.negative_binomial(
+                nb_size, nb_size / (nb_size + nb_mu), size=n_points
+            ).astype(float)
         
         st.session_state.data = data
+        st.session_state.is_discrete = distribution_type in ("poisson", "negative binomial")
         
     
     
     data = st.session_state.get('data', None)
+    is_count = st.session_state.get('is_discrete', False)
     
     
     if data is not None:
@@ -86,7 +100,10 @@ def main():
         st.header('Empirical Data')
         tabs2 = st.tabs(['Empirical Density Plot', 'Empirical CDF Plot'])
         with tabs2[0]:
-            st.plotly_chart(ep.empirical_density_plot(data), use_container_width=True)
+            st.plotly_chart(
+                ep.empirical_density_plot(data, discrete=is_count),
+                use_container_width=True,
+            )
         with tabs2[1]:
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -114,11 +131,18 @@ def main():
         )
 
         st.header("Cullen and Frey Plot")
-        cf_fig = qmc.cullen_and_frey_plot(data, seed=42)
+        cf_fig = qmc.cullen_and_frey_plot(data, discrete=is_count, seed=42)
         st.plotly_chart(cf_fig, use_container_width=True)
 
         st.header("Distribution Comparison Plots")
-        which_distributions = st.multiselect("Select Distributions", options=qmc.SUPPORTED_DISTRIBUTIONS.keys(), default=['normal'])
+        all_names = list(qmc.SUPPORTED_DISTRIBUTIONS.keys())
+        discrete_names = [n for n in all_names if n in dists.DISCRETE_DISTRIBUTIONS]
+        # Discrete and continuous families cannot be fitted to the same data.
+        options = discrete_names if is_count else [n for n in all_names if n not in discrete_names]
+        which_distributions = st.multiselect(
+            "Select Distributions", options=options,
+            default=[options[0]] if not is_count else ['poisson'],
+        )
 
         if which_distributions:
             qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
@@ -173,8 +197,8 @@ def main():
         c1, c2 = st.columns(2)
         with c1:
             om_model = st.selectbox(
-                "Distribution", options=list(qmc.SUPPORTED_DISTRIBUTIONS.keys()),
-                index=list(qmc.SUPPORTED_DISTRIBUTIONS.keys()).index('gumbel'),
+                "Distribution", options=options,
+                index=options.index('gumbel') if 'gumbel' in options else 0,
             )
         with c2:
             om_method = st.radio("R² definition", options=['identity', 'pearson'], horizontal=True)

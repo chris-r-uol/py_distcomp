@@ -4,7 +4,8 @@ PyDistComp: Python Distribution Comparison Tool
 A Python port of the distribution-fitting and comparison workflow provided by
 R's fitdistrplus package (Delignette-Muller & Dutang), covering descdist /
 Cullen and Frey graphs, mle fitting, the qqcomp / ppcomp / cdfcomp / denscomp
-comparison plots, and gofstat goodness-of-fit statistics.
+comparison plots, and gofstat goodness-of-fit statistics, for both continuous
+and discrete distributions.
 
 It also provides the off-model fraction extension of Rushton, Tate & Shepherd
 (2021), which identifies the subset of a population that does not follow the
@@ -17,6 +18,7 @@ Uncertainty on the estimates comes either from the observed information
 """
 
 from .distributions import (
+    DISCRETE_DISTRIBUTIONS,
     DISTRIBUTION_SPECS,
     SUPPORTED_DISTRIBUTIONS,
     fit_distribution,
@@ -40,7 +42,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -57,6 +59,7 @@ __all__ = [
     "ppoints",
     "SUPPORTED_DISTRIBUTIONS",
     "DISTRIBUTION_SPECS",
+    "DISCRETE_DISTRIBUTIONS",
     # Off-model fraction (Rushton et al., 2021)
     "qq_r_squared",
     "off_model_fraction",

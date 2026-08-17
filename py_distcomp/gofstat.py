@@ -21,6 +21,7 @@ NOT_COMPUTED = "not computed"
 from .distributions import (
     aic_bic,
     fit_distribution,
+    is_discrete,
     observed_information,
     r_estimate as _r_estimate,
     resolve_distribution,
@@ -72,6 +73,7 @@ class FitResult:
         self.spec = spec
         self.model = name if model is None else model
         self.r_name = spec.r_name if spec is not None else getattr(dist, "name", name)
+        self.discrete = spec.discrete if spec is not None else is_discrete(dist)
         self.data = np.asarray(data, dtype=float)
         self.n = len(self.data)
         npar = spec.n_free_params if spec is not None else len(self.params)
@@ -249,7 +251,9 @@ def gofstat(
 
     n = len(sdata)
 
-    if len(np.unique(sdata)) != n:
+    if len(np.unique(sdata)) != n and not all(
+        getattr(f, "discrete", False) for f in fits
+    ):
         warnings.warn(
             "Kolmogorov-Smirnov, Cramer-von Mises and Anderson-Darling "
             "statistics may not be correct with ties",
@@ -266,7 +270,16 @@ def gofstat(
     rows = []
     for fit in fits:
         row = {"distribution": fit.name, "r_name": fit.r_name}
-        row.update(_ks_cvm_ad(sdata, n, fit))
+        # gofstat reports the chi-squared statistic alone for a discrete fit:
+        # the other three compare a step function against a continuous one.
+        if getattr(fit, "discrete", False):
+            row.update({
+                "ks": np.nan, "ks_test": NOT_COMPUTED,
+                "cvm": np.nan, "cvm_test": NOT_COMPUTED,
+                "ad": np.nan, "ad_test": NOT_COMPUTED,
+            })
+        else:
+            row.update(_ks_cvm_ad(sdata, n, fit))
         row.update(_chisq(sdata, n, fit, breaks))
         row["aic"] = fit.aic
         row["bic"] = fit.bic
