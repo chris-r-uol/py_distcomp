@@ -239,6 +239,242 @@ cf_fig = cullen_and_frey_plot(
 )
 ```
 
+## 🧭 Worked examples
+
+Three complete walkthroughs. Every number and figure below was produced by the code shown, on the
+data shown — `python docs/make_figures.py` regenerates all of it.
+
+---
+
+### 1. Which distribution fits? — the fitdistrplus workflow
+
+Using `groundbeef`, the serving-size dataset shipped with fitdistrplus, so these are the numbers the
+R vignette prints.
+
+```python
+import numpy as np
+import py_distcomp as pdc
+
+serving = np.load("tests/groundbeef.npy")     # 254 servings, in grams
+```
+
+**Describe the data.** `descdist` gives the same seven summaries R does. Kurtosis is not excess
+kurtosis, so a normal distribution would give 3.
+
+```python
+pdc.descdist(serving)
+# {'min': 10.0, 'max': 200.0, 'median': 79.0, 'mean': 73.646, 'sd': 35.885,
+#  'skewness': 0.7353, 'kurtosis': 3.5514, 'method': 'unbiased'}
+```
+
+**Pick candidate families.** Right-skewed with kurtosis near 3.5 puts the data in the gamma /
+lognormal / Weibull region of the Cullen and Frey graph. The orange cloud is the bootstrap, showing
+how far that position could move on a resample.
+
+```python
+pdc.cullen_and_frey_plot(serving, data_name="Serving size", seed=42)
+```
+
+![Cullen and Frey graph](docs/images/cullen-frey.png)
+
+**Fit them.** Estimates come back in R's parameterisation — a gamma `rate`, not scipy's scale —
+beside the standard errors `fitdist` prints.
+
+```python
+fits = pdc.fit_distributions(serving, ["weibull", "gamma", "lognormal"])
+fits[0].summary()
+#        estimate  std_error
+# shape    2.1856     0.1046      <- R prints 2.186 (0.1046)
+# scale   83.3467     2.5271      <- R prints 83.348 (2.5269)
+```
+
+**Compare them graphically.** One call returns all four fitdistrplus comparison plots.
+
+```python
+qq, density, pp, cdf = pdc.quantile_comparison_plot(
+    serving, ["weibull", "gamma", "lognormal"], data_name="Serving size",
+)
+```
+
+![Q-Q comparison](docs/images/qq-comparison.png)
+
+![Density comparison](docs/images/density-comparison.png)
+
+![CDF comparison](docs/images/cdf-comparison.png)
+
+The empirical CDF is drawn at `ppoints(n, a = 0.5)`, as `cdfcomp` does, not at `(1:n)/n`.
+
+**And numerically.**
+
+```python
+pdc.gofstat(fits)
+#                   ks   ks_test     cvm      ad        aic        bic
+# weibull       0.1396  rejected  0.6840  3.5731  2514.4494  2521.5241
+# gamma         0.1280  rejected  0.6937  3.5671  2511.2502  2518.3249
+# lognormal     0.1493  rejected  0.8277  4.5437  2526.6386  2533.7133
+```
+
+The gamma wins on AIC — but **all three are rejected**, and a confidence band shows why. 78 of 254
+points fall outside the 95% simultaneous band, so the departure is far beyond sampling noise. The
+serving sizes are heavily rounded, and no smooth two-parameter density is going to absorb that.
+
+```python
+pdc.quantile_comparison_plot(
+    serving, "weibull", include_histogram=False, confidence_band=0.95, seed=1,
+)
+```
+
+![Q-Q plot with a confidence band](docs/images/qq-band.png)
+
+**Put an interval on it.** The bootstrap agrees closely with the Wald intervals here, which is
+itself reassurance that both are valid.
+
+```python
+boot = pdc.bootdist(fits[0], niter=1001, seed=1)
+boot.summary()
+#        estimate   median     2.5%    97.5%
+# shape    2.1856   2.1936   2.0030   2.4194
+# scale   83.3467  83.1504  78.5767  88.3180
+
+boot.quantile_ci([0.5, 0.95])         # intervals on the distribution's own quantiles
+#       median    2.5%   97.5%
+# 0.50   70.38   65.96   75.17
+# 0.95  137.27  128.95  145.75
+```
+
+![Bootstrapped parameter cloud](docs/images/bootdist.png)
+
+The diagonal smear says `shape` and `scale` trade off against one another — they cannot be read
+independently.
+
+---
+
+### 2. A bulk with a heavy tail — off-model fraction and mixtures
+
+The structure Rushton et al. (2021) describe: most of a fleet well behaved, a small subset emitting
+far more. Simulated here so the truth is known — 95% Gumbel(11.2, 8.3), 5% Gumbel(70, 25).
+
+```python
+from scipy import stats
+
+rng = np.random.default_rng(0)
+emissions = np.concatenate([
+    stats.gumbel_r.rvs(11.2, 8.3, size=950, random_state=rng),
+    stats.gumbel_r.rvs(70.0, 25.0, size=50, random_state=rng),
+])
+```
+
+**The published method: cut, refit, and find where the fit is best.**
+
+```python
+result = pdc.off_model_fraction(emissions, "gumbel")
+result
+# OffModelResult(gumbel: P_off=96, fraction=4%, R²=0.9959, n_off_model=40)
+
+result.fit.estimate        # {'loc': 11.81, 'scale': 8.69}   the bulk
+result.tail_fit.estimate   # {'loc': 84.93, 'scale': 16.22}  the off-model tail
+result.threshold           # 63.65
+```
+
+![R-squared sweep](docs/images/r2-sweep.png)
+
+The sweep peaks at the 96th percentile — a 4% off-model fraction against a true 5%. The lowest of
+the injected tail overlaps the bulk and is genuinely not separable, so recovery lands just under.
+
+![Off-model superposition](docs/images/off-model-density.png)
+
+**The likelihood-based version.** A mixture estimates weights, both components and every
+observation's assignment jointly, so nothing is discarded and each observation gets a *probability*
+rather than a label.
+
+```python
+mixture = pdc.fit_mixture(emissions, ("gumbel", "gumbel"))
+mixture.confint()
+#          estimate  std_error   lower   upper
+# weight1     0.959      0.008   0.944   0.974
+# loc1       11.799      0.308  11.194  12.403      <- truth 11.2
+# scale1      8.689      0.245   8.209   9.170      <- truth 8.3
+# weight2     0.041      0.008   0.026   0.056      <- truth 0.05
+# loc2       82.415      5.726  71.192  93.638      <- truth 70
+# scale2     18.898      3.506  12.026  25.770      <- truth 25
+
+mixture.n_starts_at_best, mixture.n_starts_converged   # (9, 9) — every start agreed
+mixture.degenerate                                      # False
+```
+
+**Read that table honestly.** The weight and the bulk are recovered tightly. The upper component is
+not: its interval on `loc2` is 22 units wide and the true 70 sits at its very edge. That is the data,
+not the algorithm — a small tail buried under a long-tailed bulk is weakly identified, and the value
+of these intervals is that they *say so* rather than leaving you to assume otherwise.
+
+![Mixture density](docs/images/mixture-density.png)
+
+The mixture is also a far better description than any single distribution, and `gofstat` will say so
+in one table:
+
+```python
+pdc.gofstat(pdc.fit_distributions(emissions, ["gumbel", "normal"]) + [mixture])
+#                      ks      cvm       ad        aic
+# gumbel           0.0613   1.3736  10.4844  8037.3185
+# normal           0.1771  12.2556  71.0721  8744.5995
+# gumbel + gumbel  0.0156   0.0380   0.2954  7856.1005      <- ΔAIC 181
+```
+
+**Per-observation probabilities** are the replacement for a hard cut:
+
+```python
+p = mixture.component_probability()
+(p > 0.5).sum(), (p > 0.9).sum()      # (41, 31)
+```
+
+![Component probability](docs/images/component-probability.png)
+
+41 observations are more likely than not to belong to the high component; 31 are near-certain. The
+curve is the answer to "how likely is *this* vehicle to be a gross emitter", which a percentile cut
+cannot give.
+
+---
+
+### 3. Count data
+
+Discrete fits go through the same functions.
+
+```python
+counts = np.random.default_rng(1).negative_binomial(4, 0.4, 2000).astype(float)
+
+fits = pdc.fit_distributions(counts, ["poisson", "negative_binomial", "geometric"])
+pdc.gofstat(fits)
+#                       chisq  chisq_pvalue        aic
+# poisson            1727.000         0.000  11600.581
+# negative_binomial     6.525         0.769  10600.379      <- the only one that survives
+# geometric           675.319         0.000  11424.994
+
+fits[1].estimate      # {'size': 4.18, 'mu': 5.903}   truth: size 4, mu 6
+```
+
+![Count density comparison](docs/images/counts-density.png)
+
+Only the chi-squared statistic appears for discrete fits — that is R's behaviour, because the
+Kolmogorov-Smirnov, Cramér-von Mises and Anderson-Darling statistics compare an empirical step
+function against a *continuous* one, and their critical values do not apply when the fitted
+distribution has jumps.
+
+---
+
+### Comparing population subsets
+
+The comparison a table of bare estimates cannot support: whether two fleets actually differ.
+
+```python
+fits = {label: pdc.bootdist(pdc.fit_distributions(subset, "gumbel")[0], niter=1001)
+        for label, subset in fleet_subsets.items()}
+pdc.confint_plot(fits, parameter="loc")
+```
+
+![Confidence intervals by subset](docs/images/confint.png)
+
+Non-overlapping intervals; the step change between Euro classes is real rather than sampling noise.
+
 ## 🎛️ Demo Application
 
 If you installed the `[app]` extra, the demo has its own command:
@@ -929,7 +1165,10 @@ Posterior probability of belonging to a component against value — the per-obse
 - **Exploratory Data Analysis**: Use Cullen and Frey plots to identify candidate distribution families
 - **Data Preprocessing**: Visualize empirical distributions before transformation or modeling
 
-## 🔧 Examples
+## 🔧 More examples
+
+See [Worked examples](#-worked-examples) above for three complete walkthroughs with output and
+figures. The snippets below cover a few other shapes of problem.
 
 ### Example 1: Financial Returns Analysis
 
