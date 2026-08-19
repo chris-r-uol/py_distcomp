@@ -1,0 +1,97 @@
+name: publish
+
+# Publishing is done through PyPI's trusted publishing: GitHub mints a
+# short-lived OIDC token for this exact workflow, in the `pypi` environment,
+# and PyPI accepts it in place of an API token. There is no secret to leak.
+#
+# To cut a release: bump the version in pyproject.toml and py_distcomp/__init__.py,
+# merge, then publish a GitHub Release tagged v<version>. The tag and the
+# packaged version are checked against each other before anything is uploaded.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check only; do not publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and verify the distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+
+      - name: Check the metadata renders on PyPI
+        # --strict fails on a README that PyPI would refuse to render, which is
+        # otherwise only discovered after an irreversible upload.
+        run: python -m twine check --strict dist/*
+
+      - name: Check the version matches the release tag
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          built=$(ls dist/*.whl | sed -E 's/.*py_distcomp-([^-]+)-.*/\1/')
+          echo "tag=$tag  built=$built"
+          if [ "$tag" != "$built" ]; then
+            echo "::error::Release tag '$tag' does not match the packaged version '$built'."
+            echo "Bump the version in pyproject.toml and py_distcomp/__init__.py, or retag."
+            exit 1
+          fi
+
+      - name: Install the wheel into a clean environment and import it
+        # The same guard tests.yml uses: a wheel that builds is not necessarily
+        # a wheel that contains the package.
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/check/bin/python -c "
+          import py_distcomp
+          assert 'site-packages' in py_distcomp.__file__, py_distcomp.__file__
+          missing = [n for n in py_distcomp.__all__ if not hasattr(py_distcomp, n)]
+          assert not missing, missing
+          print('ok:', py_distcomp.__version__, len(py_distcomp.__all__), 'exports')
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    # A manual run defaults to a dry run, so the button cannot publish by accident.
+    if: github.event_name == 'release' || inputs.dry_run == false
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/py_distcomp
+    permissions:
+      # Required for trusted publishing; nothing else needs write access.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
