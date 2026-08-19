@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from py_distcomp import distributions as dists
+from py_distcomp import estimation as est
 from py_distcomp import empirical_plots as ep
 from py_distcomp import bootdist as bd
 from py_distcomp import bootdist_plots as bdp
@@ -145,7 +146,36 @@ def main():
         )
 
         if which_distributions:
-            qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                fit_method = st.selectbox(
+                    "Estimation method", options=list(est.ESTIMATION_METHODS),
+                    help="mle: maximum likelihood; mme: moments; qme: quantiles; "
+                         "mge: goodness-of-fit",
+                )
+            with c2:
+                gof = st.selectbox(
+                    "GOF statistic", options=list(est.GOF_STATISTICS),
+                    disabled=fit_method != 'mge',
+                ) if fit_method == 'mge' else None
+            with c3:
+                band = st.selectbox(
+                    "Q-Q confidence band", options=["none", "95%", "99%"],
+                )
+
+            kwargs = {'gof': gof} if fit_method == 'mge' and gof else {}
+            band_level = {"none": None, "95%": 0.95, "99%": 0.99}[band]
+            try:
+                fits = gf.fit_distributions(data, which_distributions,
+                                            method=fit_method, **kwargs)
+                params = [f.params for f in fits]
+                qq_fig = qmc.quantile_comparison_plot(
+                    data, which_distributions, dist_params=params,
+                    confidence_band=band_level, band_niter=400, seed=42,
+                )
+            except ValueError as exc:
+                st.warning(str(exc))
+                qq_fig = qmc.quantile_comparison_plot(data, which_distributions)
 
             tabs = st.tabs(['Q-Q Plot', 'Histogram Overlay', 'P-P Plot', 'CDF Comparison'])
             for i, fig in enumerate(qq_fig):
@@ -163,7 +193,8 @@ def main():
             n_boot = st.slider("Bootstrap resamples", 100, 2000, 500, step=100)
             if st.button("Compute intervals"):
                 try:
-                    one = gf.fit_distributions(data, unc_dist)[0]
+                    one = gf.fit_distributions(data, unc_dist,
+                                               method=fit_method, **kwargs)[0]
                     with st.spinner(f"Refitting {n_boot} resamples..."):
                         boot = bd.bootdist(one, niter=n_boot, seed=42)
                 except ValueError as exc:
@@ -181,9 +212,8 @@ def main():
             st.header("Goodness of Fit")
             st.caption("Equivalent to R's gofstat(). Lower statistics, AIC and BIC indicate a better fit.")
             try:
-                fits = gf.fit_distributions(data, which_distributions)
                 st.dataframe(gf.gofstat(fits), use_container_width=True)
-            except ValueError as exc:
+            except (ValueError, NameError) as exc:
                 st.warning(str(exc))
         else:
             st.info("Select at least one distribution to compare.")

@@ -421,6 +421,9 @@ def quantile_comparison_plot(
     bins: Union[int, str, Sequence[float]] = "sturges",
     fitnbpts: int = 101,
     seed: Optional[int] = None,
+    confidence_band: Optional[float] = None,
+    band_kind: str = "simultaneous",
+    band_niter: int = 1000,
 ) -> Union[go.Figure, Tuple[go.Figure, ...]]:
     """Compare empirical data against one or more theoretical distributions.
 
@@ -460,11 +463,29 @@ def quantile_comparison_plot(
     fitnbpts : int, default=101
         Number of points used to draw fitted curves, as R's ``fitnbpts``.
     seed : int, optional
-        Seed for the ``ynoise`` jitter.
+        Seed for the ``ynoise`` jitter and for the confidence band.
+    confidence_band : float, optional
+        Coverage of a bootstrap confidence band on the Q-Q plot, e.g. ``0.95``.
+        ``None`` draws no band.  The band shows how far the points would stray
+        from the line for data that genuinely came from the fitted
+        distribution, so excursions beyond it are departures worth taking
+        seriously.  Only the first model gets a band, since overlapping bands
+        are unreadable.
+    band_kind : {'simultaneous', 'pointwise'}, default='simultaneous'
+        ``'simultaneous'`` keeps the whole curve inside with the stated
+        probability, which answers "does this data depart from the model at
+        all?".  ``'pointwise'`` gives each point its own interval, so a few
+        excursions are expected even under a perfect fit.
+    band_niter : int, default=1000
+        Simulated samples behind the band.
 
     Returns
     -------
     go.Figure, or (qq, density, pp, cdf) figures when ``include_histogram``.
+
+    See Also
+    --------
+    py_distcomp.qq_confidence_band : the band as a table, rather than a plot.
     """
     empirical_data = _validate_and_prepare_data(data)
 
@@ -475,6 +496,8 @@ def quantile_comparison_plot(
     qq_fig = _create_multi_qq_plot(
         empirical_data, distributions, title, data_name,
         a_ppoints=a_ppoints, ynoise=ynoise, seed=seed,
+        confidence_band=confidence_band, band_kind=band_kind,
+        band_niter=band_niter, models=model_list,
     )
     if not include_histogram:
         return qq_fig
@@ -583,11 +606,23 @@ def _create_multi_qq_plot(
     a_ppoints: float = 0.5,
     ynoise: bool = False,
     seed: Optional[int] = None,
+    confidence_band: Optional[float] = None,
+    band_kind: str = "simultaneous",
+    band_niter: int = 1000,
+    models: Optional[List] = None,
 ) -> go.Figure:
     """Q-Q plot of empirical against fitted quantiles -- R's ``qqcomp``."""
     fig = go.Figure()
     n = len(empirical_data)
     obsp = ppoints(n, a=a_ppoints)
+
+    # Drawn first so the points and the line sit on top of the shading.
+    if confidence_band is not None:
+        _add_confidence_band(
+            fig, empirical_data, distributions, models,
+            level=confidence_band, kind=band_kind,
+            niter=band_niter, a_ppoints=a_ppoints, seed=seed,
+        )
 
     all_quantiles = []
     for i, (distribution, params, label) in enumerate(distributions):
@@ -874,3 +909,56 @@ def _finish(
                     bordercolor="gray", borderwidth=1),
         hovermode="closest",
     )
+
+
+def _add_confidence_band(
+    fig: go.Figure,
+    empirical_data: np.ndarray,
+    distributions: List[Tuple[object, tuple, str]],
+    models: Optional[List],
+    level: float,
+    kind: str,
+    niter: int,
+    a_ppoints: float,
+    seed: Optional[int],
+) -> None:
+    """Shade a bootstrap confidence band behind the first fit's Q-Q points.
+
+    Only the first model gets one: overlapping translucent bands from several
+    fits are unreadable, and the question a band answers is about one model at
+    a time.
+    """
+    from .bootdist import qq_confidence_band
+    from .gofstat import FitResult
+
+    dist, params, label = distributions[0]
+    model = models[0] if models else label
+    try:
+        spec = resolve_distribution(model)[1]
+    except ValueError:
+        spec = None
+
+    fit = FitResult(label, dist, params, empirical_data, spec, model=model)
+    try:
+        band = qq_confidence_band(
+            fit, level=level, niter=niter, kind=kind,
+            a_ppoints=a_ppoints, seed=seed,
+        )
+    except (ValueError, RuntimeError, FloatingPointError) as exc:
+        warnings.warn(
+            f"Could not build a confidence band for '{label}': {exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+
+    colour = DISTRIBUTION_COLORS[0]
+    fig.add_trace(go.Scatter(
+        x=np.concatenate([band.theoretical, band.theoretical[::-1]]),
+        y=np.concatenate([band.upper, band.lower[::-1]]),
+        fill="toself",
+        fillcolor="rgba(150,150,150,0.25)",
+        line=dict(width=0),
+        name=f"{label} {level:.0%} {kind} band",
+        hoverinfo="skip",
+    ))

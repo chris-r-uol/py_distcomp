@@ -5,7 +5,8 @@ A Python port of the distribution-fitting and comparison workflow provided by
 R's fitdistrplus package (Delignette-Muller & Dutang), covering descdist /
 Cullen and Frey graphs, mle fitting, the qqcomp / ppcomp / cdfcomp / denscomp
 comparison plots, and gofstat goodness-of-fit statistics, for both continuous
-and discrete distributions.
+and discrete distributions, fitted by maximum likelihood, moment matching,
+quantile matching or maximum goodness-of-fit.
 
 It also provides the off-model fraction extension of Rushton, Tate & Shepherd
 (2021), which identifies the subset of a population that does not follow the
@@ -24,9 +25,17 @@ from .distributions import (
     fit_distribution,
     ppoints,
 )
-from .bootdist import BootdistResult, bootdist
+from .bootdist import BootdistResult, bootdist, qq_confidence_band
 from .bootdist_plots import bootdist_plot, confint_plot
 from .empirical_plots import empirical_cdf_plot, empirical_density_plot
+from .estimation import (
+    ESTIMATION_METHODS,
+    GOF_STATISTICS,
+    fit_by_method,
+    maximum_goodness_of_fit,
+    moment_match,
+    quantile_match,
+)
 from .gofstat import FitResult, fit_distributions, gofstat
 from .mixture import MixtureDistribution, MixtureResult, fit_mixture
 from .mixture_plots import component_probability_plot, mixture_density_plot
@@ -42,7 +51,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -78,4 +87,12 @@ __all__ = [
     "BootdistResult",
     "bootdist_plot",
     "confint_plot",
+    "qq_confidence_band",
+    # Estimation methods
+    "fit_by_method",
+    "moment_match",
+    "quantile_match",
+    "maximum_goodness_of_fit",
+    "ESTIMATION_METHODS",
+    "GOF_STATISTICS",
 ]
