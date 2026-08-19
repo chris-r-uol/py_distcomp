@@ -58,7 +58,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
