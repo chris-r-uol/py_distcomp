@@ -785,6 +785,32 @@ off-model fraction and the mixture an upper weight of 0.041, with bulk parameter
 cent of each other. Use the cut to reproduce or extend the published analysis, and the mixture when
 you want a per-vehicle probability or a likelihood-based model comparison.
 
+### Degenerate components
+
+A mixture likelihood is frequently **unbounded**: shrink a component onto a few points and it goes
+to infinity, so the highest-likelihood fit can be one that describes nothing. Four near-identical
+values among 300 standard normal draws is enough to trigger it.
+
+Every fit is checked for this, by two independent routes:
+
+- **too little support** — a component's effective sample size, `sum_i P(component | x_i)`, against
+  the parameters it has to estimate; three per parameter, never fewer than five
+- **collapsed width** — a component orders of magnitude narrower than the data's own spread, which
+  is what repeated or rounded values produce
+
+```python
+mix.degenerate      # True if any component fails
+mix.diagnostics     # per-component: weight, n_effective, n_required, width, reason
+```
+
+A degenerate fit **warns**, prints `DEGENERATE` in its repr, and reports the flag in `summary()`.
+Where the starting partitions offer a choice, a well-supported fit is preferred over a
+higher-likelihood collapsed one. `on_degenerate='raise'` turns the warning into an error;
+`'ignore'` silences it but leaves the flag set.
+
+The AIC of a degenerate fit is deliberately **not** adjusted — quietly altering a number would hide
+the problem rather than surface it. The flag is there so you know not to compare on it.
+
 ### A caveat on identifiability
 
 When the two components overlap heavily — a small tail buried under a long-tailed bulk, which is

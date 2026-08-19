@@ -37,7 +37,14 @@ from .estimation import (
     quantile_match,
 )
 from .gofstat import FitResult, fit_distributions, gofstat
-from .mixture import MixtureDistribution, MixtureResult, fit_mixture
+from .mixture import (
+    MIN_EFFECTIVE_PER_PARAM,
+    MIN_EFFECTIVE_TOTAL,
+    WIDTH_COLLAPSE_RATIO,
+    MixtureDistribution,
+    MixtureResult,
+    fit_mixture,
+)
 from .mixture_plots import component_probability_plot, mixture_density_plot
 from .off_model import OffModelResult, off_model_fraction, qq_r_squared
 from .off_model_plots import (
@@ -51,7 +58,7 @@ from .quantile_multi_comparison import (
     quantile_comparison_plot,
 )
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -82,6 +89,9 @@ __all__ = [
     "MixtureDistribution",
     "mixture_density_plot",
     "component_probability_plot",
+    "MIN_EFFECTIVE_PER_PARAM",
+    "MIN_EFFECTIVE_TOTAL",
+    "WIDTH_COLLAPSE_RATIO",
     # Uncertainty
     "bootdist",
     "BootdistResult",

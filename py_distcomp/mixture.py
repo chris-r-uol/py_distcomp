@@ -19,6 +19,13 @@ for.  The components need not be from the same family.
 
 The hard cut remains useful for initialising the EM, and that is what
 ``init='off_model'`` does.
+
+A note on degeneracy.  A mixture likelihood is often unbounded: a component that
+shrinks onto a handful of points drives it to infinity, so the "best" fit by
+likelihood can be one that describes nothing.  Every fit is therefore checked
+against :data:`MIN_EFFECTIVE_PER_PARAM`, and a fit that fails is flagged,
+warned about, and passed over in favour of a well-supported one where the
+starting partitions offer a choice.  See :attr:`MixtureResult.diagnostics`.
 """
 
 import warnings
@@ -32,9 +39,33 @@ from .distributions import density, fit_distribution, is_discrete, log_density, 
 from .gofstat import _r_estimate
 from .off_model import off_model_fraction
 
-__all__ = ["MixtureDistribution", "MixtureResult", "fit_mixture"]
+__all__ = [
+    "MixtureDistribution",
+    "MixtureResult",
+    "fit_mixture",
+    "MIN_EFFECTIVE_PER_PARAM",
+    "MIN_EFFECTIVE_TOTAL",
+    "WIDTH_COLLAPSE_RATIO",
+]
 
 _TINY = 1e-300
+
+#: Effective observations a component needs per free parameter before its
+#: estimate carries information.  A two-parameter normal supported by three
+#: observations is not an estimate, it is an interpolation, and it is exactly
+#: how a mixture likelihood runs away to infinity.  Never fewer than
+#: :data:`MIN_EFFECTIVE_TOTAL` whatever the parameter count.
+MIN_EFFECTIVE_PER_PARAM = 3.0
+
+#: Absolute floor on a component's effective sample size.
+MIN_EFFECTIVE_TOTAL = 5.0
+
+#: A component narrower than this fraction of the data's own spread has
+#: collapsed to a spike rather than found a tight subpopulation.  Repeated
+#: values are the usual cause: a component that lands on a set of identical
+#: observations has zero width and unbounded density, and its likelihood can
+#: beat any honest fit by an arbitrary margin.
+WIDTH_COLLAPSE_RATIO = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +326,7 @@ class MixtureResult:
         self.n_iter = int(n_iter)
         self.history = list(history)
         self.estimate = self._build_estimate()
+        self._diagnostics = None
 
     @property
     def weights(self) -> np.ndarray:
@@ -317,6 +349,91 @@ class MixtureResult:
             for key, value in _r_estimate(r_name, params, spec).items():
                 out[f"{key}{k}"] = value
         return out
+
+    # -- is every component actually supported by the data? -----------------
+
+    @property
+    def diagnostics(self) -> pd.DataFrame:
+        """Per-component support, and whether each is estimable at all.
+
+        A mixture likelihood is frequently unbounded: shrink a component onto a
+        few points and it goes to infinity, so the highest-likelihood fit can be
+        one that describes nothing.  The guard is the *effective sample size* of
+        each component -- the sum of its responsibilities -- against the number
+        of parameters that component has to estimate.
+
+        Columns
+        -------
+        weight, n_effective
+            Mixing weight and the observations backing it,
+            ``sum_i P(component | x_i)``.
+        n_free_params, n_required
+            Parameters to estimate, and the effective observations needed:
+            ``MIN_EFFECTIVE_PER_PARAM`` per parameter, never fewer than two.
+        width
+            The component's own standard deviation, for reference.  A collapse
+            shows up here as a value orders of magnitude below the data's.
+        degenerate, reason
+            Whether the component fails the check, and why.
+        """
+        if self._diagnostics is None:
+            self._diagnostics = self._build_diagnostics()
+        return self._diagnostics
+
+    @property
+    def degenerate(self) -> bool:
+        """Whether any component is unsupported by the data.
+
+        ``True`` means the fit should not be believed or compared on AIC: it has
+        described a handful of points exactly rather than a population.
+        """
+        return bool(self.diagnostics["degenerate"].any())
+
+    def _build_diagnostics(self) -> pd.DataFrame:
+        effective = self.responsibilities().sum(axis=0)
+        data_width = float(np.std(self.data))
+        collapse_floor = WIDTH_COLLAPSE_RATIO * data_width
+
+        rows = []
+        for k, (name, (dist, params)) in enumerate(
+            zip(self.model_names, self.dist.components), start=1
+        ):
+            _, spec = resolve_distribution(name)
+            n_free = len(_free_parameter_layout(dist, spec)[0])
+            required = max(MIN_EFFECTIVE_TOTAL, MIN_EFFECTIVE_PER_PARAM * n_free)
+
+            with np.errstate(invalid="ignore", over="ignore"):
+                try:
+                    width = float(dist.std(*params))
+                except (ValueError, TypeError, ZeroDivisionError):
+                    width = float("nan")
+
+            # Two independent routes to a meaningless component: too few
+            # observations to estimate it, or a collapse onto coincident ones.
+            reasons = []
+            if effective[k - 1] < required:
+                reasons.append(
+                    f"{effective[k - 1]:.1f} effective observations for "
+                    f"{n_free} parameter(s), needs {required:.0f}"
+                )
+            if np.isfinite(width) and data_width > 0 and width < collapse_floor:
+                reasons.append(
+                    f"width {width:.3g} has collapsed against a data spread of "
+                    f"{data_width:.3g}; look for repeated values"
+                )
+
+            rows.append({
+                "component": k,
+                "distribution": name,
+                "weight": float(self.dist.weights[k - 1]),
+                "n_effective": float(effective[k - 1]),
+                "n_free_params": n_free,
+                "n_required": required,
+                "width": width,
+                "degenerate": bool(reasons),
+                "reason": "; ".join(reasons),
+            })
+        return pd.DataFrame(rows).set_index("component")
 
     def responsibilities(self, x=None) -> np.ndarray:
         """Posterior component probabilities, ``(n, n_components)``.
@@ -352,6 +469,7 @@ class MixtureResult:
             "bic": self.bic,
             "n_free_params": self.n_free_params,
             "converged": self.converged,
+            "degenerate": self.degenerate,
             "n_iter": self.n_iter,
         }
         row.update(self.estimate)
@@ -361,8 +479,9 @@ class MixtureResult:
         parts = ", ".join(
             f"{w:.3f}·{n}" for w, n in zip(self.dist.weights, self.model_names)
         )
+        flag = ", DEGENERATE" if self.degenerate else ""
         return (f"MixtureResult({parts}; loglik={self.loglik:.1f}, "
-                f"aic={self.aic:.1f}, converged={self.converged})")
+                f"aic={self.aic:.1f}, converged={self.converged}{flag})")
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +537,7 @@ def fit_mixture(
     tol: float = 1e-8,
     min_points: int = 5,
     min_weight: float = 1e-4,
+    on_degenerate: str = "warn",
 ) -> MixtureResult:
     """Fit a superposition of distributions by expectation-maximisation.
 
@@ -453,6 +573,11 @@ def fit_mixture(
     min_weight : float, default=1e-4
         Floor on the mixing weights; a component that collapses below this is
         reported as fitted but the fit should be treated with suspicion.
+    on_degenerate : {'warn', 'raise', 'ignore'}, default='warn'
+        What to do when the chosen fit has a component too thinly supported to
+        estimate -- see :attr:`MixtureResult.diagnostics`.  Starting partitions
+        that avoid the degeneracy are always preferred first, whatever this is
+        set to; it governs only what happens when every one of them collapses.
 
     Returns
     -------
@@ -511,22 +636,50 @@ def fit_mixture(
             for partition in _split_starts(clean, models, init, min_points)
         ]
 
-    best = None
+    if on_degenerate not in ("warn", "raise", "ignore"):
+        raise ValueError("on_degenerate must be 'warn', 'raise' or 'ignore'")
+
+    candidates = []
     for components, weights in starts:
         try:
             candidate = _run_em(clean, models, specs, components, weights,
                                 max_iter, tol, min_weight, n_free)
         except (ValueError, RuntimeError, FloatingPointError):
             continue
-        if candidate is not None and (best is None or candidate.loglik > best.loglik):
-            best = candidate
+        if candidate is not None:
+            candidates.append(candidate)
 
-    if best is None:
+    if not candidates:
         raise ValueError(
             "Expectation-maximisation failed from every starting partition; "
             "try different component families or a different init"
         )
-    if np.any(best.weights < min_weight):
+
+    # Highest likelihood among the fits whose components are all supported by
+    # the data.  Sorting on likelihood alone would hand back a collapsed
+    # component every time one is reachable, because that is precisely the
+    # direction an unbounded likelihood runs in.
+    healthy = [c for c in candidates if not c.degenerate]
+    pool = healthy if healthy else candidates
+    best = max(pool, key=lambda c: c.loglik)
+
+    if best.degenerate:
+        failing = best.diagnostics[best.diagnostics["degenerate"]]
+        detail = "; ".join(
+            f"component {i} ({r.distribution}): {r.reason}"
+            for i, r in failing.iterrows()
+        )
+        message = (
+            "This mixture is degenerate: a component has collapsed onto too few "
+            f"observations to estimate it. {detail}. Its likelihood and AIC are "
+            "not comparable with a well-supported fit -- fit fewer components, "
+            "or check for repeated values in the data."
+        )
+        if on_degenerate == "raise":
+            raise ValueError(message)
+        if on_degenerate == "warn":
+            warnings.warn(message, RuntimeWarning, stacklevel=2)
+    elif np.any(best.weights < min_weight):
         warnings.warn(
             "A mixture component collapsed to a negligible weight; the data may "
             "not support this many components",
