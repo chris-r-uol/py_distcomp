@@ -955,6 +955,26 @@ qq_fig, hist_fig, pp_fig, cdf_fig = quantile_comparison_plot(
 )
 ```
 
+## 📦 Releasing
+
+Publishing runs on PyPI's trusted publishing: GitHub mints a short-lived OIDC token for
+`.github/workflows/publish.yml` running in the `pypi` environment, and PyPI accepts it in place of
+an API token. There is no secret stored anywhere.
+
+To cut a release:
+
+1. Bump the version in **both** `pyproject.toml` and `py_distcomp/__init__.py`.
+2. Merge that to `main`.
+3. Publish a GitHub Release tagged `v<version>` — e.g. `v0.7.0`.
+
+The workflow then builds the sdist and wheel, checks the metadata renders on PyPI
+(`twine check --strict`), verifies the tag matches the packaged version, installs the wheel into a
+clean environment and imports it, and only then uploads. A tag that disagrees with the version fails
+the run before anything irreversible happens.
+
+`workflow_dispatch` runs the same build and checks but defaults to a dry run, so the button cannot
+publish by accident.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
