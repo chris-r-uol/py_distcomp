@@ -785,6 +785,57 @@ off-model fraction and the mixture an upper weight of 0.041, with bulk parameter
 cent of each other. Use the cut to reproduce or extend the published analysis, and the mixture when
 you want a per-vehicle probability or a likelihood-based model comparison.
 
+### Uncertainty on mixture parameters
+
+Standard errors come from the observed information, as for a single fit — but the weights need
+care. They sum to one, so differentiating with respect to all of them gives a singular matrix. The
+Hessian is taken over `K − 1` log-odds against the last component and mapped back to the weights by
+the delta method.
+
+```python
+mix.std_error     # every weight and component parameter
+mix.confint()     # Wald intervals
+mix.vcov          # variance-covariance
+mix.correlation
+```
+
+On a well-separated two-component normal fit these agree with `bootdist` to within a few per cent
+on every parameter, and the weight's standard error lands near `sqrt(w(1-w)/n)` — the value it would
+take if classification were certain. The weight block of `vcov` is singular by construction: with
+two components their correlation is exactly −1, which is right rather than a defect.
+
+A **degenerate fit reports no uncertainty at all** — `vcov` is `None` and the standard errors are
+`nan`. A collapsed component has none to quote.
+
+Mixtures test the Wald assumptions harder than single fits do, so where these and `bootdist`
+disagree, believe the bootstrap.
+
+### Choosing among local optima
+
+EM finds a *local* optimum, so the useful output is not only the best fit but **how many independent
+starts agreed on it**:
+
+```python
+mix.n_starts            # deterministic partitions plus random restarts
+mix.n_starts_converged
+mix.n_starts_at_best    # how many reached the winning likelihood
+mix.start_logliks       # every start's result, best first
+```
+
+Restarts are seeded by k-means++ so they genuinely differ from one another and from the quantile
+splits. They default to on for two reasons, both measured:
+
+- **Beyond two components the deterministic strategy offers a single starting point.** Without
+  restarts a three-component fit has exactly one, and no way to know whether it is any good.
+- On three overlapping components, restarts found a **strictly better optimum in 12 of 25 trials**.
+
+Agreement tracks reliability directly. Well-separated data: 9 of 9 starts reached the same
+likelihood, spread 0.000. Overlapping data: 3 of 8, spread 1.775 — a signal to distrust the fit that
+nothing else in the output would have given you.
+
+They are not free: a three-component fit costs roughly 20 s with restarts against under a second
+without. `n_start=0` turns them off. The seed is fixed by default so a fit is reproducible.
+
 ### Degenerate components
 
 A mixture likelihood is frequently **unbounded**: shrink a component onto a few points and it goes

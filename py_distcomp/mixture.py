@@ -35,7 +35,15 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from .distributions import density, fit_distribution, is_discrete, log_density, resolve_distribution
+from .distributions import (
+    _hessian,
+    density,
+    fit_distribution,
+    is_discrete,
+    log_density,
+    resolve_distribution,
+    scipy_params,
+)
 from .gofstat import _r_estimate
 from .off_model import off_model_fraction
 
@@ -255,8 +263,7 @@ def _weighted_mle(dist, spec, data: np.ndarray, weights: np.ndarray, start: tupl
 
     def negll(z):
         trial = unpack(z)
-        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            logpdf = log_density(dist, data, trial)
+        logpdf = _quiet(log_density, dist, data, trial)
         if not np.all(np.isfinite(logpdf)):
             return np.inf
         return -float(np.sum(weights * logpdf))
@@ -327,6 +334,14 @@ class MixtureResult:
         self.history = list(history)
         self.estimate = self._build_estimate()
         self._diagnostics = None
+        self._vcov = None
+        self._vcov_computed = False
+        # Filled in by fit_mixture once the search is over.
+        self.n_starts = 1
+        self.n_starts_converged = 1
+        self.n_starts_healthy = 1
+        self.n_starts_at_best = 1
+        self.start_logliks: List[float] = [float(loglik)]
 
     @property
     def weights(self) -> np.ndarray:
@@ -402,11 +417,10 @@ class MixtureResult:
             n_free = len(_free_parameter_layout(dist, spec)[0])
             required = max(MIN_EFFECTIVE_TOTAL, MIN_EFFECTIVE_PER_PARAM * n_free)
 
-            with np.errstate(invalid="ignore", over="ignore"):
-                try:
-                    width = float(dist.std(*params))
-                except (ValueError, TypeError, ZeroDivisionError):
-                    width = float("nan")
+            try:
+                width = float(_quiet(dist.std, *params))
+            except (ValueError, TypeError, ZeroDivisionError):
+                width = float("nan")
 
             # Two independent routes to a meaningless component: too few
             # observations to estimate it, or a collapse onto coincident ones.
@@ -434,6 +448,172 @@ class MixtureResult:
                 "reason": "; ".join(reasons),
             })
         return pd.DataFrame(rows).set_index("component")
+
+    # -- uncertainty of the estimates ---------------------------------------
+
+    @property
+    def vcov(self) -> Optional[pd.DataFrame]:
+        """Variance-covariance matrix of the estimates, or ``None``.
+
+        The inverse observed information, as for a single fit -- but the weights
+        need care.  They sum to one, so differentiating with respect to all of
+        them gives a singular matrix.  The Hessian is therefore taken over
+        ``K - 1`` log-odds against the last component, and mapped back to the
+        weights themselves by the delta method.
+
+        The weight block of the result is singular by construction, since the
+        weights are linearly dependent; with two components their correlation is
+        exactly -1.  That is correct rather than a defect, and the diagonal is
+        still the right place to read standard errors from.
+
+        ``None`` when the Hessian is singular or the fit is degenerate -- a
+        collapsed component has no meaningful uncertainty to report.
+        """
+        if not self._vcov_computed:
+            self._vcov_computed = True
+            self._vcov = self._compute_vcov()
+        return self._vcov
+
+    @property
+    def std_error(self) -> Dict[str, float]:
+        """Standard errors of every weight and component parameter."""
+        vcov = self.vcov
+        if vcov is None:
+            return {k: float("nan") for k in self.estimate}
+        variances = np.diag(vcov.to_numpy())
+        with np.errstate(invalid="ignore"):
+            errors = np.where(variances >= 0, np.sqrt(np.abs(variances)), np.nan)
+        return dict(zip(self.estimate, (float(e) for e in errors)))
+
+    @property
+    def correlation(self) -> Optional[pd.DataFrame]:
+        """Correlation matrix of the estimates."""
+        vcov = self.vcov
+        if vcov is None:
+            return None
+        matrix = vcov.to_numpy()
+        sd = np.sqrt(np.clip(np.diag(matrix), 0, None))
+        if not np.all(np.isfinite(sd)) or np.any(sd <= 0):
+            return None
+        return pd.DataFrame(matrix / np.outer(sd, sd),
+                            index=vcov.index, columns=vcov.columns)
+
+    def confint(self, level: float = 0.95) -> pd.DataFrame:
+        """Wald confidence intervals on the weights and component parameters.
+
+        Symmetric and asymptotic, and mixtures test those assumptions harder
+        than single fits do: a weakly identified component has a skewed
+        sampling distribution, and a weight near 0 or 1 sits close enough to the
+        boundary that a symmetric interval can run outside ``[0, 1]``.  Where
+        the two disagree, believe :func:`~py_distcomp.bootdist`.
+        """
+        if not 0 < level < 1:
+            raise ValueError("level must lie strictly between 0 and 1")
+        from scipy import stats as _stats
+
+        z = _stats.norm.ppf(0.5 + level / 2)
+        errors = self.std_error
+        return pd.DataFrame(
+            {
+                "estimate": list(self.estimate.values()),
+                "std_error": [errors[k] for k in self.estimate],
+                "lower": [self.estimate[k] - z * errors[k] for k in self.estimate],
+                "upper": [self.estimate[k] + z * errors[k] for k in self.estimate],
+            },
+            index=list(self.estimate),
+        )
+
+    def _component_specs(self):
+        out = []
+        for name, (dist, params) in zip(self.model_names, self.dist.components):
+            _, spec = resolve_distribution(name)
+            r_name = spec.r_name if spec is not None else getattr(dist, "name", name)
+            out.append((dist, spec, r_name))
+        return out
+
+    def _compute_vcov(self) -> Optional[pd.DataFrame]:
+        """Observed information over (log-odds weights, component parameters)."""
+        if self.degenerate:
+            return None
+
+        specs = self._component_specs()
+        k = self.n_components
+        weights = np.asarray(self.dist.weights, dtype=float)
+        if np.any(weights <= 0) or np.any(weights >= 1):
+            return None
+
+        # Free vector: K-1 log-odds against the last component, then each
+        # component's parameters in R's own parameterisation.
+        theta = [
+            [self.estimate[f"{name}{i + 1}"] for name in spec.r_params]
+            for i, (_, spec, _) in enumerate(specs)
+        ]
+        sizes = [len(t) for t in theta]
+        eta = np.log(weights[:-1] / weights[-1])
+        z0 = np.concatenate([eta] + [np.asarray(t, dtype=float) for t in theta])
+
+        def unpack(z):
+            raw = np.concatenate([np.asarray(z[: k - 1], dtype=float), [0.0]])
+            raw = raw - raw.max()
+            w = np.exp(raw)
+            w = w / w.sum()
+            parts, at = [], k - 1
+            for (dist, spec, r_name), size in zip(specs, sizes):
+                parts.append((dist, scipy_params(r_name, z[at:at + size], spec)))
+                at += size
+            return w, parts
+
+        def negll(z):
+            try:
+                w, parts = unpack(z)
+            except (ValueError, ZeroDivisionError, FloatingPointError):
+                return np.inf
+            stacked = _quiet(
+                lambda: np.vstack([density(d, self.data, p) for d, p in parts])
+            )
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                total = np.tensordot(w, stacked, axes=(0, 0))
+                if not np.all(np.isfinite(total)) or np.any(total <= 0):
+                    return np.inf
+                return -float(np.sum(np.log(total)))
+
+        if not np.isfinite(negll(z0)):
+            return None
+        hessian = _hessian(negll, z0)
+        if not np.all(np.isfinite(hessian)):
+            return None
+        if np.linalg.matrix_rank(hessian) != hessian.shape[0]:
+            return None
+        try:
+            vcov_z = np.linalg.inv(hessian)
+        except np.linalg.LinAlgError:
+            return None
+        if not np.all(np.isfinite(vcov_z)):
+            return None
+
+        # Delta method from the log-odds back onto the weights themselves:
+        # dw_a/deta_b = w_a (delta_ab - w_b).
+        n_theta = sum(sizes)
+        jac = np.zeros((k + n_theta, (k - 1) + n_theta))
+        for a in range(k):
+            for b in range(k - 1):
+                jac[a, b] = weights[a] * ((1.0 if a == b else 0.0) - weights[b])
+        jac[k:, k - 1:] = np.eye(n_theta)
+
+        vcov = jac @ vcov_z @ jac.T
+        if not np.all(np.isfinite(vcov)):
+            return None
+
+        names = list(self.estimate)
+        # estimate is ordered weight1, params1, weight2, params2, ...; the free
+        # vector is all weights then all parameters, so reorder to match.
+        order = []
+        for i in range(k):
+            order.append(i)
+            base = k + sum(sizes[:i])
+            order.extend(range(base, base + sizes[i]))
+        vcov = vcov[np.ix_(order, order)]
+        return pd.DataFrame(vcov, index=names, columns=names)
 
     def responsibilities(self, x=None) -> np.ndarray:
         """Posterior component probabilities, ``(n, n_components)``.
@@ -495,7 +675,48 @@ def _clean(data) -> np.ndarray:
     return np.sort(np.asarray(series.to_numpy(), dtype=float))
 
 
-def _split_starts(data: np.ndarray, models, init, min_points: int) -> List[List[np.ndarray]]:
+def _quiet(fn, *args, **kwargs):
+    """Evaluate something on a possibly-collapsed component without the noise.
+
+    A component whose scale has reached zero makes scipy warn about dividing by
+    it.  During the search that is expected: the candidate is being measured so
+    the degeneracy guard can reject it, and numpy's ``errstate`` does not cover
+    warnings scipy raises through the ``warnings`` module.  Silencing it here
+    keeps the guard's own message the only one the user sees.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with np.errstate(all="ignore"):
+            return fn(*args, **kwargs)
+
+
+def _kmeanspp_partition(data: np.ndarray, k: int, rng) -> List[np.ndarray]:
+    """Partition the data around k centres chosen by k-means++ seeding.
+
+    Splitting a shuffled sample at random is useless as a starting point --
+    every part looks like the whole.  Choosing centres far apart, each with
+    probability proportional to its squared distance from the nearest centre
+    already chosen, produces partitions that genuinely differ from one another
+    and from the quantile splits.
+    """
+    centres = [float(rng.choice(data))]
+    for _ in range(k - 1):
+        nearest = np.min([(data - c) ** 2 for c in centres], axis=0)
+        total = nearest.sum()
+        if total <= 0:                       # every point already a centre
+            centres.append(float(rng.choice(data)))
+        else:
+            centres.append(float(rng.choice(data, p=nearest / total)))
+
+    # Ascending order keeps component 1 the low one across restarts, which is
+    # what makes the fits comparable at all.
+    centres = np.sort(centres)
+    assignment = np.argmin(np.abs(data[:, None] - centres[None, :]), axis=1)
+    return [data[assignment == j] for j in range(k)]
+
+
+def _split_starts(data: np.ndarray, models, init, min_points: int,
+                  n_start: int = 0, rng=None) -> List[List[np.ndarray]]:
     """Candidate partitions of the data used to seed the EM."""
     n_comp = len(models)
     candidates: List[List[np.ndarray]] = []
@@ -521,6 +742,13 @@ def _split_starts(data: np.ndarray, models, init, min_points: int) -> List[List[
             if all(len(p) >= min_points for p in parts):
                 candidates.append(parts)
 
+    # Random restarts, so that agreement between starts becomes evidence the
+    # optimum is global rather than the first one EM happened to fall into.
+    for _ in range(max(0, n_start)):
+        parts = _kmeanspp_partition(data, n_comp, rng)
+        if all(len(p) >= min_points for p in parts):
+            candidates.append(parts)
+
     if not candidates:
         raise ValueError(
             f"Could not build a starting partition with at least {min_points} "
@@ -538,6 +766,8 @@ def fit_mixture(
     min_points: int = 5,
     min_weight: float = 1e-4,
     on_degenerate: str = "warn",
+    n_start: int = 5,
+    seed: Optional[int] = 0,
 ) -> MixtureResult:
     """Fit a superposition of distributions by expectation-maximisation.
 
@@ -578,6 +808,16 @@ def fit_mixture(
         estimate -- see :attr:`MixtureResult.diagnostics`.  Starting partitions
         that avoid the degeneracy are always preferred first, whatever this is
         set to; it governs only what happens when every one of them collapses.
+    n_start : int, default=5
+        Random restarts in addition to the deterministic partitions, seeded by
+        k-means++ so they genuinely differ.  EM finds a *local* optimum, so the
+        useful output is not just the best fit but how many starts agreed on it
+        -- see :attr:`MixtureResult.n_starts_at_best`.  Ignored when ``init`` is
+        a fitted mixture, which is a single deliberate pass.
+    seed : int or None, default=0
+        Seed for the restarts.  Fixed by default so that a fit is reproducible;
+        pass ``None`` to draw from entropy.  An isolated generator is used, so
+        the global numpy random state is left untouched.
 
     Returns
     -------
@@ -631,9 +871,11 @@ def fit_mixture(
             )
         starts = [(list(warm_start.components), np.array(warm_start.weights))]
     else:
+        rng = np.random.default_rng(seed)
         starts = [
             _initial_from_partition(models, partition, len(clean), min_weight)
-            for partition in _split_starts(clean, models, init, min_points)
+            for partition in _split_starts(clean, models, init, min_points,
+                                           n_start=n_start, rng=rng)
         ]
 
     if on_degenerate not in ("warn", "raise", "ignore"):
@@ -662,6 +904,16 @@ def fit_mixture(
     healthy = [c for c in candidates if not c.degenerate]
     pool = healthy if healthy else candidates
     best = max(pool, key=lambda c: c.loglik)
+
+    # How much of the search agreed. Many starts reaching the same likelihood is
+    # the cheapest evidence there is that the optimum is global; one start
+    # standing alone is a warning that it may not be.
+    at_best = sum(1 for c in pool if abs(c.loglik - best.loglik) <= 1e-6 * max(1.0, abs(best.loglik)))
+    best.n_starts = len(starts)
+    best.n_starts_converged = len(candidates)
+    best.n_starts_healthy = len(healthy)
+    best.n_starts_at_best = at_best
+    best.start_logliks = sorted((c.loglik for c in candidates), reverse=True)
 
     if best.degenerate:
         failing = best.diagnostics[best.diagnostics["degenerate"]]
@@ -720,8 +972,9 @@ def _run_em(data, models, specs, components, weights, max_iter, tol, min_weight,
 
     for iteration in range(1, max_iter + 1):
         # E step: responsibilities under the current parameters.
-        with np.errstate(under="ignore"):
-            densities = np.vstack([density(d, data, p) for d, p in components])
+        densities = _quiet(
+            lambda: np.vstack([density(d, data, p) for d, p in components])
+        )
         weighted = densities * weights[:, None]
         total = weighted.sum(axis=0)
         if not np.all(np.isfinite(total)) or np.all(total <= 0):
