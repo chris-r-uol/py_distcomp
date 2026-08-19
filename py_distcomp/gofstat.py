@@ -64,10 +64,16 @@ class FitResult:
         ``bic = -2 loglik + log(n) npar``.
     model : str or scipy distribution
         The specification the fit came from, kept so that a bootstrap can refit.
+    method : str
+        Which estimator produced it: ``'mle'``, ``'mme'``, ``'qme'`` or
+        ``'mge'``, as R's ``fitdist(method = ...)``.
     """
 
-    def __init__(self, name, dist, params, data, spec=None, model=None):
+    def __init__(self, name, dist, params, data, spec=None, model=None,
+                 method="mle", method_kwargs=None):
         self.name = name
+        self.method = method
+        self.method_kwargs = dict(method_kwargs or {})
         self.dist = dist
         self.params = tuple(params)
         self.spec = spec
@@ -175,13 +181,34 @@ class FitResult:
 def fit_distributions(
     data: Union[np.ndarray, pd.Series, list],
     models: Union[str, object, Sequence] = "normal",
+    method: str = "mle",
+    **method_kwargs,
 ) -> List[FitResult]:
-    """Fit one or more distributions by maximum likelihood.
+    """Fit one or more distributions.
 
-    This is the equivalent of calling ``fitdist(data, distname)`` once per
+    The equivalent of calling ``fitdist(data, distname, method)`` once per
     distribution and collecting the results in a list, which is what
     ``gofstat`` and the ``*comp`` plots consume in R.
+
+    Parameters
+    ----------
+    data : array-like
+        Input data.
+    models : str, scipy distribution, or a sequence of either
+        Distribution(s) to fit.
+    method : {'mle', 'mme', 'qme', 'mge'}, default='mle'
+        Maximum likelihood, moment matching, quantile matching, or maximum
+        goodness-of-fit.  See :mod:`py_distcomp.estimation`.
+    **method_kwargs
+        Passed to the estimator: ``order`` for ``'mme'``, ``probs`` for
+        ``'qme'``, ``gof`` for ``'mge'``.
+
+    Returns
+    -------
+    list of FitResult
     """
+    from .estimation import fit_by_method
+
     clean = _clean(data)
     if isinstance(models, (str, bytes)) or not isinstance(models, (list, tuple)):
         models = [models]
@@ -189,9 +216,10 @@ def fit_distributions(
     results = []
     for model in models:
         dist, spec = resolve_distribution(model)
-        _, params = fit_distribution(model, clean)
+        _, params = fit_by_method(model, clean, method, **method_kwargs)
         name = model if isinstance(model, str) else getattr(dist, "name", str(model))
-        results.append(FitResult(name, dist, params, clean, spec, model=model))
+        results.append(FitResult(name, dist, params, clean, spec, model=model,
+                                 method=method, method_kwargs=method_kwargs))
     return results
 
 

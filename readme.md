@@ -20,7 +20,8 @@ the fitdistrplus vignette, using the package's own `groundbeef` dataset.
 |---|---|
 | `descdist` | `descdist(..., graph = FALSE)` |
 | `cullen_and_frey_plot` | `descdist(..., graph = TRUE)` |
-| `fit_distributions` | `fitdist(..., method = "mle")` |
+| `fit_distributions` | `fitdist(..., method = "mle"/"mme"/"qme"/"mge")` |
+| `moment_match`, `quantile_match`, `maximum_goodness_of_fit` | `mmedist`, `qmedist`, `mgedist` |
 | `FitResult.std_error` / `.vcov` / `.correlation` | `fitdist`'s `sd`, `vcov`, `cor` |
 | `bootdist` | `bootdist` |
 | `gofstat` | `gofstat` |
@@ -46,7 +47,8 @@ principled version of the paper's percentile cut — see
 ## 🌟 Features
 
 - **Multi-Distribution Comparison**: Compare your data against multiple theoretical distributions simultaneously
-- **Maximum-Likelihood Fitting**: Parameter estimation matching `fitdist(..., method = "mle")`, reported in R's parameterisation
+- **Four Estimation Methods**: maximum likelihood, moment matching, quantile matching and maximum goodness-of-fit, matching `fitdist(..., method = ...)` and reported in R's parameterisation
+- **Q-Q Confidence Bands**: bootstrap bands showing whether a departure from the line is larger than sampling noise
 - **Goodness-of-Fit Statistics**: Kolmogorov-Smirnov, Cramér-von Mises, Anderson-Darling and chi-squared statistics, with R's test decisions, plus AIC and BIC
 - **Uncertainty**: standard errors and correlations from the observed information, plus bootstrap confidence intervals on parameters and quantiles
 - **Interactive Visualizations**: Plotly plots with hover information and zoom
@@ -465,6 +467,74 @@ mix.component_probability()   # per-observation chance of the high-rate regime
 `descdist` and `cullen_and_frey_plot(discrete=True)` remain the way to choose a family in the first
 place — the graph's negative binomial region and Poisson line are drawn for exactly this case.
 
+## 🎚️ Estimation methods
+
+`fit_distributions(..., method=)` dispatches exactly as R's `fitdist` does.
+
+| `method=` | fitdistrplus | minimises |
+|---|---|---|
+| `'mle'` (default) | `mledist` | the negative log-likelihood |
+| `'mme'` | `mmedist` | the distance between theoretical and sample moments |
+| `'qme'` | `qmedist` | the distance between theoretical and sample quantiles |
+| `'mge'` | `mgedist` | a goodness-of-fit statistic directly |
+
+```python
+fit_distributions(x, 'weibull', method='mme')                    # moment matching
+fit_distributions(x, 'weibull', method='qme', probs=[0.9, 0.99]) # match the tail
+fit_distributions(x, 'weibull', method='mge', gof='ADR')         # right-tail weighted
+```
+
+**When each earns its place.** `'mme'` has closed forms for ten distributions — normal, lognormal,
+Poisson, exponential, gamma, negative binomial, geometric, beta, uniform and logistic — so it cannot
+fail to converge, which makes it a dependable fallback when likelihood optimisation misbehaves.
+`'qme'` fits where you tell it to: match at 0.9 and 0.99 and the tail is what gets fitted, at the
+cost of the middle. `'mge'` optimises the statistic a reader will judge the fit by, and its
+`gof='ADR'` and `'AD2R'` variants weight the right tail specifically — directly relevant when the
+tail is the thing of interest.
+
+`gof` accepts `'CvM'` (default), `'KS'`, `'AD'`, and the tail-weighted `'ADR'`, `'ADL'`, `'AD2R'`,
+`'AD2L'`, `'AD2'` — `R`/`L` for the right and left tail, `2` for the squared variants that weight
+the extremes harder still.
+
+Each estimator does what it claims: on the `groundbeef` Weibull, `method='mge', gof='KS'` gives a
+lower KS statistic than maximum likelihood does, and maximum likelihood gives a higher
+log-likelihood than any of them. `bootdist` refits with whichever method produced the original, so
+bootstrapping an `'mge'` fit describes the sampling behaviour of *that* estimator.
+
+## 📐 Q-Q confidence bands
+
+A Q-Q plot shows where the data departs from the fitted distribution, but not whether the departure
+is bigger than sampling noise would produce anyway. A bootstrap band answers that.
+
+```python
+from py_distcomp import qq_confidence_band, quantile_comparison_plot
+
+# as a plot
+quantile_comparison_plot(x, 'weibull', confidence_band=0.95)
+
+# or as a table, to count the excursions
+band = qq_confidence_band(fit, level=0.95, kind='simultaneous')
+outside = (band.observed < band.lower) | (band.observed > band.upper)
+outside.sum()
+```
+
+**`kind='simultaneous'`** (the plot's default) keeps the *whole* curve inside with the stated
+probability, so a single excursion is evidence of a real departure. **`kind='pointwise'`** gives
+each point its own interval, so with *n* points a handful will fall outside by chance even under a
+perfect fit — useful for seeing *where* a fit strains, not *whether* it does.
+
+**`refit=True`** (the default) re-estimates the parameters on every simulated sample. This matters
+more than it looks: the real points are plotted against quantiles fitted to the real data, so the
+fit has already absorbed part of the discrepancy, and the null distribution has to absorb the same
+part to be comparable. On data genuinely from the fitted family this gives 4.9% of points outside a
+nominal 5% pointwise band. Turning it off treats the estimated parameters as if they were known to
+be correct, which makes the band far too wide — 0.2% outside on the same check — so real departures
+can hide inside it.
+
+The band pairs naturally with the off-model method: where `off_model_fraction` finds the cut by
+maximising R², the band says whether the points beyond it are outside what the fitted distribution
+would produce.
+
 ## 📏 Uncertainty on the estimates
 
 A fitted parameter without an interval can be reported but not compared. Two routes are available.
@@ -763,6 +833,9 @@ Histogram with each weighted component of a jointly fitted mixture and their sum
 ### Bootstrap Parameter Cloud
 The resampled parameter estimates, one panel per pair, with the original estimate marked. R's `plot.bootdist`.
 
+### Q-Q Plot with Confidence Band
+A Q-Q plot shaded with a bootstrap band, so departures larger than sampling noise are visible at a glance.
+
 ### Confidence Interval Plot
 Estimates with their intervals, several fits side by side, for comparing population subsets.
 
@@ -927,8 +1000,8 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Standard errors, variance-covariance and correlation of the estimates**
 - [x] **Bootstrap confidence intervals (`bootdist`), including on mixture weights**
 - [x] **Discrete distributions: Poisson, negative binomial and geometric**
-- [ ] Other estimation methods: moment matching (`mmedist`), quantile matching (`qmedist`), maximum goodness-of-fit (`mgedist`)
-- [ ] Add confidence bands for Q-Q plots
+- [x] **Moment, quantile and maximum goodness-of-fit estimation (`mmedist`, `qmedist`, `mgedist`)**
+- [x] **Bootstrap confidence bands for Q-Q plots**
 - [ ] Support for censored data analysis
 - [ ] Integration with statistical testing frameworks
 - [ ] Publication to PyPI
