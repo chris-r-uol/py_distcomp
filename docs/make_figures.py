@@ -112,6 +112,12 @@ def main():
     save(pdc.component_probability_plot(mixture, data_name="Emission ratio"),
          "component-probability")
 
+    # --- spliced ------------------------------------------------------------
+    spliced = pdc.fit_spliced(emissions, "gumbel", "pareto")
+    save(pdc.spliced_density_plot(spliced, data_name="Emission ratio", log_y=True),
+         "spliced-density")
+    save(pdc.threshold_profile_plot(spliced), "threshold-profile")
+
     # --- counts -------------------------------------------------------------
     counts = np.random.default_rng(1).negative_binomial(4, 0.4, 2000).astype(float)
     _, count_density, _, _ = pdc.quantile_comparison_plot(

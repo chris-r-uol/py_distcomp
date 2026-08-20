@@ -40,6 +40,10 @@ the fitdistrplus vignette, using the package's own `groundbeef` dataset.
 which extends the fitdistrplus workflow rather than reproducing it. See
 [Off-model fraction analysis](#-off-model-fraction-analysis) below.
 
+`fit_spliced` is that method's principled successor: rather than searching percentiles for a cut, it
+estimates the threshold by likelihood alongside both sides — see
+[Spliced distributions](#-spliced-distributions-one-heavier-tail-not-two-populations).
+
 `fit_mixture` estimates the same superposition jointly by expectation-maximisation, which is the
 principled version of the paper's percentile cut — see
 [Mixture fitting](#-mixture-fitting-superposition-of-distributions).
@@ -941,6 +945,86 @@ observations so the population can be described as a superposition of two distri
 `OffModelResult.curve` holds the whole sweep — percentile, retained `n`, threshold, R² and the
 fitted parameters at each cut — which is the data behind Figure 5.
 
+## ✂️ Spliced distributions: one heavier tail, not two populations
+
+`fit_spliced` answers a question a mixture cannot. A mixture says the tail is a **second population**
+sitting on top of the first — both components have mass everywhere, and every observation belongs to
+each with some probability. A splice says there is **one population whose tail is heavier** than its
+body implies: below a threshold θ one family governs, above it another, each renormalised so the
+whole remains a proper density.
+
+<p align="center"><i>f(x) = w · f₁(x)/F₁(θ) for x ≤ θ &nbsp;&nbsp;|&nbsp;&nbsp; (1−w) · f₂(x)/(1−F₂(θ)) for x &gt; θ</i></p>
+
+This is the principled successor to the percentile cut of Rushton et al. (2021). That method
+*searches* percentiles for the cut that maximises a Q-Q R². This one **estimates θ by likelihood**
+alongside both sides, and returns it with a profile-likelihood confidence interval.
+
+```python
+from py_distcomp import fit_spliced, spliced_density_plot, threshold_profile_plot
+
+fit = fit_spliced(emissions, lower="gumbel", upper="pareto")
+
+fit.threshold          # the estimated join, θ
+fit.threshold_ci()     # profile-likelihood interval for it
+fit.weight             # mass below θ — determined by continuity, not fitted
+fit.lower_estimate     # {'loc': ..., 'scale': ...}
+fit.upper_estimate     # {'shape': ..., 'scale': ...}
+fit.n_above            # observations the upper family governs
+```
+
+![Spliced density](docs/images/spliced-density.png)
+
+### Continuity determines the weight
+
+By default the two pieces are required to **meet** at θ, which is what makes the result one density
+rather than two stitched fragments. That constraint fixes `w` rather than leaving it free:
+
+<p align="center"><i>w = b / (a + b),&nbsp;&nbsp; a = f₁(θ)/F₁(θ),&nbsp;&nbsp; b = f₂(θ)/(1−F₂(θ))</i></p>
+
+So a continuous splice of two two-parameter families estimates **five** quantities: θ and two per
+side. `continuous=False` frees the weight and permits a jump, which `SplicedDistribution.jump`
+reports — a large one means the two families do not belong together.
+
+### The threshold is profiled, not optimised
+
+The likelihood changes shape whenever θ crosses an observation, so it is not differentiable there
+and cannot be optimised smoothly. It is profiled over a grid instead, which also produces the
+interval for free:
+
+![Threshold profile](docs/images/threshold-profile.png)
+
+**Look at this plot before trusting the threshold.** A sharp peak means the data locates the join; a
+flat ridge — as above, because that example's data is really a mixture — means it does not, whatever
+the point estimate says.
+
+### Which model is right? Let the data decide
+
+The two constructions are **distinguishable**. Fit both to data generated each way and the right one
+wins:
+
+| data generated as | single | mixture | splice | AIC prefers |
+|---|---|---|---|---|
+| **mixture** (two populations) | 8037.3 | **7856.1** | 7876.8 | mixture ✓ |
+| **splice** (one heavy tail) | 15373.0 | 15079.1 | **15067.9** | splice ✓ |
+
+```python
+gofstat([
+    fit_distributions(x, "gumbel")[0],
+    fit_mixture(x, ("gumbel", "gumbel")),
+    fit_spliced(x, "gumbel", "pareto"),
+])
+```
+
+So "is the tail a second population, or the same population with a heavier tail?" is no longer a
+choice inherited from whichever tool was to hand — it is a model comparison the data can settle.
+
+### A note on the tail parameters
+
+Only the **shape** of a Pareto tail is identifiable once it is truncated above θ: a Pareto truncated
+above θ is a Pareto starting at θ with the same shape, so the scale carries no separate information.
+The shape is the quantity that governs how heavy the tail is, and it is recovered well — 2.2 → 2.10
+on simulated data.
+
 ## 🔀 Mixture fitting: superposition of distributions
 
 The off-model method splits a population with a hard cut, then fits each side separately. That
@@ -1140,6 +1224,12 @@ A grid of Q-Q plots, one per cut, showing how the fitted location and scale resp
 ### Off-Model Density Plot
 The population as a superposition of the distribution fitted to the retained data and the distribution fitted to the off-model tail, each weighted by its share of the population.
 
+### Spliced Density Plot
+The fitted density drawn as the two pieces it is made of, with the join marked. A log density axis is usually the only way to see a tail beside a body many times taller.
+
+### Threshold Profile Plot
+The profile log-likelihood the threshold was read from, with its confidence interval shaded — a flat ridge is a warning the join is not located.
+
 ### Mixture Density Plot
 Histogram with each weighted component of a jointly fitted mixture and their sum.
 
@@ -1338,6 +1428,7 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Discrete distributions: Poisson, negative binomial and geometric**
 - [x] **Moment, quantile and maximum goodness-of-fit estimation (`mmedist`, `qmedist`, `mgedist`)**
 - [x] **Bootstrap confidence bands for Q-Q plots**
+- [x] **Spliced (composite) distributions, with the threshold estimated by likelihood**
 - [ ] Support for censored data analysis
 - [ ] Integration with statistical testing frameworks
 - [ ] Publication to PyPI

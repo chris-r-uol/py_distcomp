@@ -52,13 +52,15 @@ from .off_model_plots import (
     percentile_cut_qq_plot,
     r_squared_sweep_plot,
 )
+from .spliced import SplicedDistribution, SplicedResult, fit_spliced
+from .spliced_plots import spliced_density_plot, threshold_profile_plot
 from .quantile_multi_comparison import (
     cullen_and_frey_plot,
     descdist,
     quantile_comparison_plot,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 __author__ = "Chris Rushton"
 __email__ = "c.e.rushton@leeds.ac.uk"
 
@@ -105,4 +107,10 @@ __all__ = [
     "maximum_goodness_of_fit",
     "ESTIMATION_METHODS",
     "GOF_STATISTICS",
+    # Spliced (composite) distributions
+    "fit_spliced",
+    "SplicedResult",
+    "SplicedDistribution",
+    "spliced_density_plot",
+    "threshold_profile_plot",
 ]
