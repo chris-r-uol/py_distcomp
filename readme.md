@@ -945,6 +945,79 @@ observations so the population can be described as a superposition of two distri
 `OffModelResult.curve` holds the whole sweep — percentile, retained `n`, threshold, R² and the
 fitted parameters at each cut — which is the data behind Figure 5.
 
+## 🔬 Measurement error: fitting the distribution behind the readings
+
+Some quantities cannot be observed directly. A remote sensing device measures a concentration ratio
+that is physically non-negative, but propagates enough error that individual readings come back
+**negative**. Discarding those biases the distribution high — the error works both ways — so they are
+kept, and what is actually observed is
+
+<p align="center"><i>Y = X + ε</i></p>
+
+with *X* the true value and *ε* symmetric instrument error. Fitting a family directly to *Y*
+estimates the **smeared** distribution: its spread is the true spread inflated by the error, and its
+shape has to accommodate values the true quantity can never take.
+
+`fit_convolved` fits *X* instead.
+
+```python
+from py_distcomp import fit_convolved, convolved_density_plot
+
+fit = fit_convolved(readings, true_family="gamma", error="normal")
+
+fit.true_estimate     # {'shape': 2.07, 'rate': 0.169}  — the quantity of interest
+fit.scale             # 5.90  the error scale, estimated
+fit.true_sd           # 8.51  spread of the truth
+fit.observed_sd       # 10.35 spread of the readings
+fit.inflation         # +21.7%  how much the noise widened them
+```
+
+![Measurement-error model](docs/images/convolved-density.png)
+
+### Why this matters more than it looks
+
+**The inflation lands on the spread, which is usually the parameter being compared.** Fit a Gumbel
+directly to readings of a gamma-distributed quantity smeared by a normal error, and its scale comes
+out **45% too high**. Comparing that number between groups compares emissions *and* instrument
+noise.
+
+**It unlocks families the observations forbid.** A gamma or lognormal cannot be fitted to data
+containing negatives — scipy raises — which is why an unbounded family is often chosen by default.
+But a lognormal can perfectly well be *the truth behind* such data, and the convolution recovers it:
+meanlog 2.287 against a true 2.303, sdlog 0.709 against 0.700, from a sample where a direct fit is
+impossible.
+
+**It beats the alternatives on their own terms.** The fitted model goes into `gofstat` like anything
+else:
+
+```
+                     ks    cvm      ad        aic
+gumbel            0.023  0.330   2.187  21996.180
+normal            0.097  9.958  59.351  22788.103
+logistic          0.058  2.695  28.399  22439.794
+lognormal+normal  0.013  0.060   0.425  21970.117    <- AIC prefers it
+```
+
+### Supplying the error scale, or estimating it
+
+`scale=None` (the default) estimates it alongside everything else, which works because a symmetric
+error and a skewed signal are separable — on simulated data it recovers 5.90 against a true 6.0.
+Pass `scale=` to fix it from calibration instead.
+
+**Getting a supplied scale wrong distorts the spread far more than the mean:**
+
+| σ assumed | fitted sd | vs truth 8.49 |
+|---|---|---|
+| 3.0 | 10.49 | +24% |
+| 6.0 ✓ | 8.44 | — |
+| 9.0 | 6.00 | −29% |
+
+When the calibration is not solid, estimating is the safer choice.
+
+`error` accepts `'normal'` (default), `'laplace'`, `'logistic'` and `'cauchy'`, all taken as
+symmetric and centred on zero. The error is assumed **constant** — a per-observation scale is not yet
+supported.
+
 ## ✂️ Spliced distributions: one heavier tail, not two populations
 
 `fit_spliced` answers a question a mixture cannot. A mixture says the tail is a **second population**
@@ -1224,6 +1297,9 @@ A grid of Q-Q plots, one per cut, showing how the fitted location and scale resp
 ### Off-Model Density Plot
 The population as a superposition of the distribution fitted to the retained data and the distribution fitted to the off-model tail, each weighted by its share of the population.
 
+### Measurement-Error Density Plot
+The readings, the smeared density that describes them, and the narrower true density recovered from behind it — with the physically impossible region marked.
+
 ### Spliced Density Plot
 The fitted density drawn as the two pieces it is made of, with the join marked. A log density axis is usually the only way to see a tail beside a body many times taller.
 
@@ -1429,6 +1505,7 @@ GitHub: [@chris-r-uol](https://github.com/chris-r-uol)
 - [x] **Moment, quantile and maximum goodness-of-fit estimation (`mmedist`, `qmedist`, `mgedist`)**
 - [x] **Bootstrap confidence bands for Q-Q plots**
 - [x] **Spliced (composite) distributions, with the threshold estimated by likelihood**
+- [x] **Measurement-error (convolution) models, recovering the distribution behind noisy readings**
 - [ ] Support for censored data analysis
 - [ ] Integration with statistical testing frameworks
 - [ ] Publication to PyPI
