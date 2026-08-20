@@ -118,6 +118,16 @@ def main():
          "spliced-density")
     save(pdc.threshold_profile_plot(spliced), "threshold-profile")
 
+    # --- measurement error --------------------------------------------------
+    # A non-negative truth read by an instrument that propagates symmetric
+    # error, so some readings come back negative.
+    noise_rng = np.random.default_rng(0)
+    truth = stats.gamma.rvs(2.0, scale=6.0, size=4000, random_state=noise_rng)
+    readings = truth + noise_rng.normal(0, 6.0, 4000)
+    save(pdc.convolved_density_plot(
+        pdc.fit_convolved(readings, "gamma", error="normal"),
+        data_name="Instrument reading"), "convolved-density")
+
     # --- counts -------------------------------------------------------------
     counts = np.random.default_rng(1).negative_binomial(4, 0.4, 2000).astype(float)
     _, count_density, _, _ = pdc.quantile_comparison_plot(
